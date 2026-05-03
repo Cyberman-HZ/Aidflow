@@ -1,0 +1,57 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Build output
+dist
+dist-ssr
+*.local
+build/
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment
+.env
+.env.local
+.env.production
+
+# PWA / Service worker generated
+dev-dist/
+
+# Local DBs / vector stores (per PDF spec)
+chroma_db/
+*.sqlite
+*.sqlite-journal
+aidflow.db
+
+# Uploaded user content (PDFs, kids media)
+uploads/
+public/uploads/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Gemma model files (kept locally, not committed)
+*.gguf
+*.safetensors
+gemma_model/

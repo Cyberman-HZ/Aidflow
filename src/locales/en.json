@@ -1,0 +1,227 @@
+{
+  "app": {
+    "name": "AidFlow Pro",
+    "tagline": "AI-Powered Humanitarian Aid Distribution"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "families": "Families",
+    "distribute": "Distribute",
+    "assistant": "AI Assistant",
+    "knowledge": "Knowledge Base",
+    "kids": "Children Content",
+    "guides": "Aid Guides",
+    "map": "Starlink Map",
+    "chat": "Bitchat",
+    "reports": "Reports",
+    "settings": "Settings",
+    "logout": "Sign out"
+  },
+  "connectivity": {
+    "online": "Online — Full AI",
+    "local": "Local Mode — Offline AI",
+    "disconnected": "Disconnected — Rule fallback",
+    "ollama_down": "Ollama unreachable. Start it with OLLAMA_ORIGINS=*"
+  },
+  "login": {
+    "title": "Sign in",
+    "subtitle": "Enter your PIN to access AidFlow Pro",
+    "pin": "PIN",
+    "submit": "Sign in",
+    "demo_users": "Demo users",
+    "wrong_pin": "Invalid PIN",
+    "select_user": "Select user"
+  },
+  "dashboard": {
+    "title": "Mission Overview",
+    "kpi_families": "Families Served Today",
+    "kpi_items": "Items Distributed",
+    "kpi_critical": "Critical Priority",
+    "kpi_ai_status": "Gemma 4 Status",
+    "recent_distributions": "Recent Distributions",
+    "priority_distribution": "Priority Distribution",
+    "view_all": "View all",
+    "ai_recommendation": "Today's AI Recommendation"
+  },
+  "families": {
+    "title": "Families",
+    "search": "Search by name or ID…",
+    "filter_sector": "All sectors",
+    "rerun_ai": "Re-run AI prioritization",
+    "loading_ai": "Gemma 4 is analyzing {{count}} families…",
+    "no_families": "No families match your filters.",
+    "members": "members",
+    "children_under5": "children <5",
+    "elderly": "elderly",
+    "pregnant": "pregnant member",
+    "score": "Priority",
+    "sector": "Sector",
+    "last_aid": "Last aid",
+    "days_ago": "{{n}}d ago",
+    "never": "never"
+  },
+  "family_detail": {
+    "title": "Family {{id}}",
+    "head": "Head of household",
+    "demographics": "Demographics",
+    "medical": "Medical conditions",
+    "displacement": "Displacement status",
+    "income": "Income",
+    "ai_breakdown": "AI Score Breakdown",
+    "ask_about": "Ask Gemma 4 about this family",
+    "history": "Distribution History",
+    "no_history": "No distributions recorded yet.",
+    "edit": "Edit profile"
+  },
+  "distribute": {
+    "title": "Distribution Session",
+    "step1": "1. Select sector",
+    "step2": "2. Review AI-ranked list",
+    "step3": "3. Mark delivery",
+    "step4": "4. Update record",
+    "select_sector": "Select sector",
+    "next": "Next",
+    "back": "Back",
+    "items": "Items to distribute",
+    "add_item": "Add item",
+    "qty": "Qty",
+    "category": "Category",
+    "deliver": "Mark delivered",
+    "post_notes": "Post-delivery notes",
+    "flag_new_need": "Flag new urgent need",
+    "save_update": "Save & recompute priority",
+    "saved": "Saved. Priority recalculated.",
+    "duplicate_warning": "This family received aid {{n}} day(s) ago. Continue?"
+  },
+  "assistant": {
+    "title": "AI Assistant — Gemma 4",
+    "placeholder": "Ask anything about families, protocols, or aid items…",
+    "send": "Send",
+    "thinking": "Thinking…",
+    "use_rag": "Search knowledge base",
+    "use_wiki": "Wikipedia web search",
+    "system_note": "Powered by your local Gemma 4 E4B — your data never leaves this device.",
+    "examples": {
+      "title": "Example queries",
+      "q1": "Which families need medical supplies in Sector B?",
+      "q2": "Summarize the cholera response protocol for field workers.",
+      "q3": "How should I prioritize family F-0042 today?"
+    }
+  },
+  "knowledge": {
+    "title": "Knowledge Base",
+    "subtitle": "Upload PDF protocols. Gemma 4 will reference them when answering.",
+    "drop_zone": "Drop PDFs here or click to browse",
+    "uploading": "Processing {{name}}…",
+    "extracting": "Extracting text…",
+    "embedding": "Embedding chunks…",
+    "saving": "Saving to local store…",
+    "category": "Category",
+    "title_label": "Title",
+    "categories": {
+      "medical": "Medical",
+      "food": "Food",
+      "shelter": "Shelter",
+      "water": "Water",
+      "protection": "Protection",
+      "general": "General"
+    },
+    "no_docs": "No documents uploaded yet.",
+    "delete": "Delete",
+    "pages": "{{n}} pages",
+    "chunks": "{{n}} chunks",
+    "ask_question": "Ask a question about your documents"
+  },
+  "kids": {
+    "title": "Children Emotional Support Library",
+    "subtitle": "Age-appropriate stories, images, and videos for children in crisis zones.",
+    "all_ages": "All ages",
+    "age_group": "Age group",
+    "all_languages": "All languages",
+    "type": "Type",
+    "upload": "Upload content",
+    "no_content": "No content available."
+  },
+  "guides": {
+    "title": "Aid Usage Guides",
+    "subtitle": "How-to guides for distributed items.",
+    "search": "Search guides…",
+    "ask_gemma": "Ask Gemma 4 about this guide",
+    "no_guides": "No guides yet."
+  },
+  "map": {
+    "title": "Starlink Coverage Map",
+    "subtitle": "Plan connectivity before deploying to the field.",
+    "my_location": "My location",
+    "filter_country": "All countries",
+    "filter_signal": "All signals",
+    "signal": {
+      "strong": "Strong",
+      "moderate": "Moderate",
+      "weak": "Weak"
+    },
+    "type": {
+      "official": "Official",
+      "reseller": "Reseller",
+      "installer": "Installer",
+      "service_point": "Service point"
+    },
+    "directions": "Directions",
+    "add_pin": "Add custom pin"
+  },
+  "chat": {
+    "title": "Bitchat — Bluetooth Mesh",
+    "channel": "Channel",
+    "message_placeholder": "Type a message…",
+    "send": "Send",
+    "scan": "Scan for devices",
+    "connected": "Connected to {{name}}",
+    "no_bluetooth": "Web Bluetooth is not supported in this browser. Use Chrome or Edge.",
+    "queued": "Queued — will deliver when peer is in range",
+    "via_bluetooth": "via Bluetooth",
+    "via_nostr": "via Nostr",
+    "no_messages": "No messages yet."
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "dark_mode": "Dark mode",
+    "ai_section": "AI Configuration",
+    "ollama_url": "Ollama base URL",
+    "ollama_model": "Gemma 4 model tag",
+    "embed_model": "Embedding model",
+    "test_connection": "Test connection",
+    "connection_ok": "Connected to Ollama. Model: {{model}}",
+    "connection_fail": "Cannot reach Ollama. Make sure it is running with OLLAMA_ORIGINS=*",
+    "data_section": "Data",
+    "reset_demo": "Reset demo data",
+    "reset_confirm": "This will erase all local data and reload the demo seed. Continue?",
+    "save": "Save"
+  },
+  "reports": {
+    "title": "Reports",
+    "by_sector": "Distributions by sector",
+    "by_priority": "Priority distribution",
+    "over_time": "Distributions over time",
+    "export_csv": "Export CSV",
+    "summary": "Generate AI summary",
+    "summary_placeholder": "Click Generate AI summary to have Gemma 4 produce an executive brief."
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "close": "Close",
+    "loading": "Loading…",
+    "error": "Something went wrong.",
+    "yes": "Yes",
+    "no": "No",
+    "all": "All",
+    "back": "Back"
+  },
+  "priority": {
+    "CRITICAL": "Critical",
+    "HIGH": "High",
+    "MEDIUM": "Medium",
+    "NORMAL": "Normal"
+  }
+}

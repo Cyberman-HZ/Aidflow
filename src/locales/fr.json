@@ -1,0 +1,118 @@
+{
+  "app": { "name": "AidFlow Pro", "tagline": "Plateforme de Distribution d'Aide Humanitaire par IA" },
+  "nav": {
+    "dashboard": "Tableau de bord", "families": "Familles", "distribute": "Distribuer",
+    "assistant": "Assistant IA", "knowledge": "Base de connaissances", "kids": "Contenu enfants",
+    "guides": "Guides d'aide", "map": "Carte Starlink", "chat": "Bitchat",
+    "reports": "Rapports", "settings": "Paramètres", "logout": "Déconnexion"
+  },
+  "connectivity": {
+    "online": "En ligne — IA complète",
+    "local": "Mode local — IA hors ligne",
+    "disconnected": "Déconnecté — Règles de secours",
+    "ollama_down": "Ollama injoignable. Démarrez-le avec OLLAMA_ORIGINS=*"
+  },
+  "login": {
+    "title": "Connexion", "subtitle": "Entrez votre code PIN pour accéder à AidFlow Pro",
+    "pin": "PIN", "submit": "Se connecter", "demo_users": "Utilisateurs de démo",
+    "wrong_pin": "PIN invalide", "select_user": "Sélectionnez un utilisateur"
+  },
+  "dashboard": {
+    "title": "Vue de la mission", "kpi_families": "Familles servies aujourd'hui",
+    "kpi_items": "Articles distribués", "kpi_critical": "Priorité critique",
+    "kpi_ai_status": "État de Gemma 4", "recent_distributions": "Distributions récentes",
+    "priority_distribution": "Distribution des priorités", "view_all": "Tout voir",
+    "ai_recommendation": "Recommandation IA du jour"
+  },
+  "families": {
+    "title": "Familles", "search": "Rechercher par nom ou ID…", "filter_sector": "Tous les secteurs",
+    "rerun_ai": "Relancer la priorisation IA", "loading_ai": "Gemma 4 analyse {{count}} familles…",
+    "no_families": "Aucune famille ne correspond aux filtres.",
+    "members": "membres", "children_under5": "enfants <5", "elderly": "âgés", "pregnant": "membre enceinte",
+    "score": "Priorité", "sector": "Secteur", "last_aid": "Dernière aide",
+    "days_ago": "il y a {{n}}j", "never": "jamais"
+  },
+  "family_detail": {
+    "title": "Famille {{id}}", "head": "Chef de famille", "demographics": "Démographie",
+    "medical": "Conditions médicales", "displacement": "Statut de déplacement", "income": "Revenu",
+    "ai_breakdown": "Détail du score IA", "ask_about": "Demander à Gemma 4 sur cette famille",
+    "history": "Historique des distributions", "no_history": "Aucune distribution enregistrée.",
+    "edit": "Modifier le profil"
+  },
+  "distribute": {
+    "title": "Session de distribution", "step1": "1. Sélectionner le secteur",
+    "step2": "2. Examiner la liste IA", "step3": "3. Confirmer la livraison",
+    "step4": "4. Mettre à jour la fiche", "select_sector": "Sélectionner un secteur",
+    "next": "Suivant", "back": "Retour", "items": "Articles à distribuer", "add_item": "Ajouter",
+    "qty": "Qté", "category": "Catégorie", "deliver": "Marquer livré",
+    "post_notes": "Notes post-livraison", "flag_new_need": "Signaler nouveau besoin",
+    "save_update": "Enregistrer et recalculer la priorité",
+    "saved": "Enregistré. Priorité recalculée.",
+    "duplicate_warning": "Cette famille a reçu une aide il y a {{n}} jour(s). Continuer ?"
+  },
+  "assistant": {
+    "title": "Assistant IA — Gemma 4",
+    "placeholder": "Demandez sur les familles, protocoles ou articles…",
+    "send": "Envoyer", "thinking": "Réflexion…", "use_rag": "Chercher dans la base", "use_wiki": "Recherche Wikipédia",
+    "system_note": "Propulsé par votre Gemma 4 E4B local — vos données ne quittent jamais l'appareil.",
+    "examples": {
+      "title": "Exemples", "q1": "Quelles familles ont besoin de fournitures médicales dans le secteur B ?",
+      "q2": "Résumez le protocole de réponse au choléra.",
+      "q3": "Comment prioriser la famille F-0042 aujourd'hui ?"
+    }
+  },
+  "knowledge": {
+    "title": "Base de connaissances",
+    "subtitle": "Téléversez des PDF de protocoles. Gemma 4 les utilisera dans ses réponses.",
+    "drop_zone": "Déposez les PDF ici ou cliquez pour parcourir",
+    "uploading": "Traitement de {{name}}…", "extracting": "Extraction du texte…",
+    "embedding": "Calcul des vecteurs…", "saving": "Sauvegarde locale…",
+    "category": "Catégorie", "title_label": "Titre",
+    "categories": { "medical": "Médical", "food": "Alimentation", "shelter": "Abri", "water": "Eau", "protection": "Protection", "general": "Général" },
+    "no_docs": "Aucun document téléversé.", "delete": "Supprimer",
+    "pages": "{{n}} pages", "chunks": "{{n}} segments", "ask_question": "Posez une question sur vos documents"
+  },
+  "kids": {
+    "title": "Bibliothèque de soutien émotionnel pour enfants",
+    "subtitle": "Histoires, images et vidéos adaptées aux enfants en zones de crise.",
+    "all_ages": "Tous âges", "age_group": "Groupe d'âge", "all_languages": "Toutes langues",
+    "type": "Type", "upload": "Téléverser", "no_content": "Aucun contenu."
+  },
+  "guides": {
+    "title": "Guides d'utilisation", "subtitle": "Modes d'emploi pour les articles distribués.",
+    "search": "Rechercher…", "ask_gemma": "Demander à Gemma 4 sur ce guide", "no_guides": "Aucun guide."
+  },
+  "map": {
+    "title": "Carte de couverture Starlink",
+    "subtitle": "Planifiez la connectivité avant le déploiement.",
+    "my_location": "Ma position", "filter_country": "Tous les pays", "filter_signal": "Tous signaux",
+    "signal": { "strong": "Fort", "moderate": "Moyen", "weak": "Faible" },
+    "type": { "official": "Officiel", "reseller": "Revendeur", "installer": "Installateur", "service_point": "Point de service" },
+    "directions": "Itinéraire", "add_pin": "Ajouter un point"
+  },
+  "chat": {
+    "title": "Bitchat — Maillage Bluetooth",
+    "channel": "Canal", "message_placeholder": "Tapez un message…", "send": "Envoyer",
+    "scan": "Rechercher des appareils", "connected": "Connecté à {{name}}",
+    "no_bluetooth": "Web Bluetooth non supporté. Utilisez Chrome ou Edge.",
+    "queued": "En file — sera livré dès qu'un pair est à portée",
+    "via_bluetooth": "via Bluetooth", "via_nostr": "via Nostr", "no_messages": "Aucun message."
+  },
+  "settings": {
+    "title": "Paramètres", "language": "Langue", "dark_mode": "Mode sombre",
+    "ai_section": "Configuration IA", "ollama_url": "URL d'Ollama", "ollama_model": "Modèle Gemma 4",
+    "embed_model": "Modèle d'embedding", "test_connection": "Tester la connexion",
+    "connection_ok": "Connecté à Ollama. Modèle : {{model}}",
+    "connection_fail": "Ollama injoignable. Lancez-le avec OLLAMA_ORIGINS=*",
+    "data_section": "Données", "reset_demo": "Réinitialiser les données de démo",
+    "reset_confirm": "Toutes les données locales seront effacées. Continuer ?", "save": "Enregistrer"
+  },
+  "reports": {
+    "title": "Rapports", "by_sector": "Distributions par secteur",
+    "by_priority": "Répartition par priorité", "over_time": "Distributions dans le temps",
+    "export_csv": "Exporter CSV", "summary": "Générer un résumé IA",
+    "summary_placeholder": "Cliquez sur Générer pour que Gemma 4 produise un résumé exécutif."
+  },
+  "common": { "save": "Enregistrer", "cancel": "Annuler", "close": "Fermer", "loading": "Chargement…", "error": "Une erreur est survenue.", "yes": "Oui", "no": "Non", "all": "Tous", "back": "Retour" },
+  "priority": { "CRITICAL": "Critique", "HIGH": "Élevée", "MEDIUM": "Moyenne", "NORMAL": "Normale" }
+}
