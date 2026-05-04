@@ -7,10 +7,8 @@ import {
   Sparkles,
   BookOpen,
   Smile,
-  HelpCircle,
   Map as MapIcon,
   MessageSquare,
-  BarChart3,
   Settings as Cog,
   LogOut,
   Menu,
@@ -35,16 +33,14 @@ export default function Layout() {
   const [open, setOpen] = useState(false);
 
   const items: NavItem[] = [
+    { to: '/assistant', label: t('nav.assistant'), icon: Sparkles },
     { to: '/dashboard', label: t('nav.dashboard'), icon: LayoutDashboard },
     { to: '/families', label: t('nav.families'), icon: Users },
     { to: '/distribute', label: t('nav.distribute'), icon: PackageCheck },
-    { to: '/assistant', label: t('nav.assistant'), icon: Sparkles },
     { to: '/docs', label: t('nav.knowledge'), icon: BookOpen },
     { to: '/kids', label: t('nav.kids'), icon: Smile },
-    { to: '/guides', label: t('nav.guides'), icon: HelpCircle },
     { to: '/map', label: t('nav.map'), icon: MapIcon },
     { to: '/chat', label: t('nav.chat'), icon: MessageSquare },
-    { to: '/reports', label: t('nav.reports'), icon: BarChart3 },
     { to: '/settings', label: t('nav.settings'), icon: Cog },
   ];
 

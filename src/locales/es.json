@@ -1,10 +1,10 @@
 {
   "app": { "name": "AidFlow Pro", "tagline": "Plataforma de Distribución de Ayuda Humanitaria con IA" },
   "nav": {
-    "dashboard": "Panel", "families": "Familias", "distribute": "Distribuir",
-    "assistant": "Asistente IA", "knowledge": "Base de conocimiento", "kids": "Contenido niños",
-    "guides": "Guías de ayuda", "map": "Mapa Starlink", "chat": "Bitchat",
-    "reports": "Informes", "settings": "Ajustes", "logout": "Cerrar sesión"
+    "dashboard": "Panel e informes", "families": "Familias", "distribute": "Distribuir",
+    "assistant": "Asistente AidFlow", "knowledge": "Base de conocimiento", "kids": "Contenido niños",
+    "map": "Starlink", "chat": "Bitchat",
+    "settings": "Ajustes", "logout": "Cerrar sesión"
   },
   "connectivity": {
     "online": "En línea — IA completa",
@@ -26,6 +26,17 @@
   },
   "families": {
     "title": "Familias", "search": "Buscar por nombre o ID…", "filter_sector": "Todos los sectores",
+    "filter_priority": "Todas las prioridades",
+    "sort_by": "Ordenar por",
+    "sort_score_desc": "Prioridad — alta → baja",
+    "sort_score_asc": "Prioridad — baja → alta",
+    "sort_name": "Nombre (A → Z)",
+    "sort_id": "ID familia",
+    "sort_members": "Familias más grandes primero",
+    "sort_children": "Más niños primero",
+    "sort_last_aid_asc": "Ayuda más antigua primero",
+    "sort_last_aid_desc": "Ayuda más reciente primero",
+    "sort_sector": "Sector (A → Z)",
     "rerun_ai": "Reejecutar priorización IA", "loading_ai": "Gemma 4 analizando {{count}} familias…",
     "no_families": "Ninguna familia coincide con los filtros.",
     "members": "miembros", "children_under5": "niños <5", "elderly": "ancianos", "pregnant": "embarazada",
@@ -40,7 +51,23 @@
     "edit": "Editar perfil"
   },
   "distribute": {
-    "title": "Sesión de distribución", "step1": "1. Seleccionar sector",
+    "title": "Sesión de distribución",
+    "tab_new": "Nueva distribución",
+    "tab_history": "Historial",
+    "history_title": "Distribuciones anteriores",
+    "filter_sector_all": "Todos los sectores",
+    "filter_worker_all": "Todos los agentes",
+    "filter_flag_all": "Todas",
+    "filter_flag_yes": "Solo marcadas",
+    "filter_flag_no": "No marcadas",
+    "filter_from": "Desde",
+    "filter_to": "Hasta",
+    "filter_search": "Buscar familias, artículos, notas…",
+    "filter_clear": "Limpiar filtros",
+    "history_empty": "Ninguna distribución coincide con estos filtros.",
+    "history_count": "{{count}} distribuciones · {{items}} artículos · {{families}} familias",
+    "export_csv": "Exportar CSV",
+    "step1": "1. Seleccionar sector",
     "step2": "2. Revisar lista priorizada", "step3": "3. Marcar entrega",
     "step4": "4. Actualizar registro", "select_sector": "Seleccionar sector",
     "next": "Siguiente", "back": "Atrás", "items": "Artículos a distribuir", "add_item": "Agregar",
@@ -51,7 +78,7 @@
     "duplicate_warning": "Esta familia recibió ayuda hace {{n}} día(s). ¿Continuar?"
   },
   "assistant": {
-    "title": "Asistente IA — Gemma 4",
+    "title": "Asistente AidFlow",
     "placeholder": "Pregunte sobre familias, protocolos o artículos…",
     "send": "Enviar", "thinking": "Pensando…", "use_rag": "Buscar en la base de conocimiento", "use_wiki": "Búsqueda en Wikipedia",
     "system_note": "Impulsado por su Gemma 4 E4B local — sus datos nunca salen del dispositivo.",
@@ -63,7 +90,9 @@
   },
   "knowledge": {
     "title": "Base de conocimiento",
-    "subtitle": "Cargue PDFs de protocolos. Gemma 4 los usará en sus respuestas.",
+    "subtitle": "Cargue PDFs de protocolos y guías de uso. El Asistente AidFlow los usará en sus respuestas.",
+    "tab_documents": "Documentos",
+    "tab_guides": "Guías de ayuda",
     "drop_zone": "Suelte los PDFs aquí o haga clic para examinar",
     "uploading": "Procesando {{name}}…", "extracting": "Extrayendo texto…",
     "embedding": "Calculando vectores…", "saving": "Guardando localmente…",
@@ -83,8 +112,8 @@
     "search": "Buscar guías…", "ask_gemma": "Preguntar a Gemma 4 sobre esta guía", "no_guides": "Sin guías."
   },
   "map": {
-    "title": "Mapa de cobertura Starlink",
-    "subtitle": "Planifique la conectividad antes del despliegue.",
+    "title": "Starlink",
+    "subtitle": "Cobertura por país y lista de minoristas autorizados.",
     "my_location": "Mi ubicación", "filter_country": "Todos los países", "filter_signal": "Todas las señales",
     "signal": { "strong": "Fuerte", "moderate": "Moderada", "weak": "Débil" },
     "type": { "official": "Oficial", "reseller": "Revendedor", "installer": "Instalador", "service_point": "Punto de servicio" },

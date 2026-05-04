@@ -20,11 +20,9 @@ import Distribute from './pages/Distribute';
 import Assistant from './pages/Assistant';
 import KnowledgeBase from './pages/KnowledgeBase';
 import KidsContent from './pages/KidsContent';
-import AidGuides from './pages/AidGuides';
 import StarlinkMap from './pages/StarlinkMap';
 import Bitchat from './pages/Bitchat';
 import Settings from './pages/Settings';
-import Reports from './pages/Reports';
 
 export default function App() {
   const { i18n } = useTranslation();
@@ -52,21 +50,22 @@ export default function App() {
           </RequireAuth>
         }
       >
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/" element={<Navigate to="/assistant" replace />} />
+        <Route path="/assistant" element={<Assistant />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/families" element={<Families />} />
         <Route path="/families/:id" element={<FamilyDetail />} />
         <Route path="/distribute" element={<Distribute />} />
-        <Route path="/assistant" element={<Assistant />} />
         <Route path="/docs" element={<KnowledgeBase />} />
         <Route path="/kids" element={<KidsContent />} />
-        <Route path="/guides" element={<AidGuides />} />
         <Route path="/map" element={<StarlinkMap />} />
         <Route path="/chat" element={<Bitchat />} />
         <Route path="/settings" element={<Settings />} />
-        <Route path="/reports" element={<Reports />} />
+        {/* Old routes redirect to merged pages */}
+        <Route path="/reports" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/guides" element={<Navigate to="/docs" replace />} />
       </Route>
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<Navigate to="/assistant" replace />} />
     </Routes>
   );
 }

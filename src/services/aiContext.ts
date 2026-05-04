@@ -1,9 +1,9 @@
 // Builds the global system-prompt context that the AI Assistant uses.
 //
 // Goal: give Gemma 4 read-access to every module's data — families, distributions,
-// uploaded knowledge documents, aid usage guides, children content metadata,
-// Starlink providers, Bitchat channels, and computed dashboard stats — EXCEPT
-// app Settings (per the user's request).
+// uploaded knowledge documents, aid usage guides, children content library,
+// Starlink country availability + authorized retailers, Bitchat channels, and
+// computed dashboard stats — EXCEPT app Settings (per the user's request).
 //
 // Heavy media (base64 image/video data, PDF bodies) is intentionally excluded.
 // PDF content remains queryable via the RAG pipeline triggered by the
@@ -11,14 +11,20 @@
 
 import { db } from '@/db/database';
 import { computeRuleScore } from '@/services/priorityRules';
+import {
+  COUNTRIES as STARLINK_COUNTRIES,
+  STATUS_LABEL as STARLINK_STATUS_LABEL,
+  LAST_UPDATED as STARLINK_COUNTRIES_UPDATED,
+} from '@/services/starlinkCountries';
 import type {
   Family,
   AidDistribution,
   KnowledgeDocument,
   AidGuide,
   KidsContent,
-  StarlinkProvider,
+  StarlinkReseller,
   BitchatMessage,
+  Continent,
 } from '@/types';
 
 export interface AppSnapshot {
@@ -27,21 +33,21 @@ export interface AppSnapshot {
   documents: KnowledgeDocument[];
   guides: AidGuide[];
   kids: KidsContent[];
-  providers: StarlinkProvider[];
+  resellers: StarlinkReseller[];
   messages: BitchatMessage[];
 }
 
 export async function loadAppSnapshot(): Promise<AppSnapshot> {
-  const [families, distributions, documents, guides, kids, providers, messages] = await Promise.all([
+  const [families, distributions, documents, guides, kids, resellers, messages] = await Promise.all([
     db.families.toArray(),
     db.distributions.toArray(),
     db.documents.toArray(),
     db.guides.toArray(),
     db.kids.toArray(),
-    db.providers.toArray(),
+    db.resellers.toArray(),
     db.messages.toArray(),
   ]);
-  return { families, distributions, documents, guides, kids, providers, messages };
+  return { families, distributions, documents, guides, kids, resellers, messages };
 }
 
 // ---- Per-section serializers --------------------------------------------
@@ -115,13 +121,55 @@ function kidsBlock(kids: KidsContent[]): string {
   return `## CHILDREN CONTENT LIBRARY (${kids.length}, metadata only)\n${lines.join('\n')}\n`;
 }
 
-function providersBlock(p: StarlinkProvider[]): string {
-  if (p.length === 0) return '## STARLINK PROVIDERS\n— none —\n';
-  const lines = p.map(
-    (x) =>
-      `${x.id} | ${x.name} | ${x.region}, ${x.country} | type:${x.type} | signal:${x.signal} | lat:${x.lat.toFixed(3)} lng:${x.lng.toFixed(3)}${x.phone ? ` | phone:${x.phone}` : ''}`
-  );
-  return `## STARLINK PROVIDERS (${p.length})\n${lines.join('\n')}\n`;
+// Country availability (static curated snapshot, ~130 countries).
+function starlinkCountriesBlock(): string {
+  const groups = { available: [] as string[], soon: [] as string[], waitlist: [] as string[], unavailable: [] as string[] };
+  for (const c of STARLINK_COUNTRIES) {
+    const note = c.notes ? ` (${c.notes})` : '';
+    groups[c.status].push(`${c.code}=${c.name}${note}`);
+  }
+  return `## STARLINK COUNTRY AVAILABILITY (snapshot ${STARLINK_COUNTRIES_UPDATED})
+${STARLINK_STATUS_LABEL.available} (${groups.available.length}): ${groups.available.join('; ')}
+${STARLINK_STATUS_LABEL.soon} (${groups.soon.length}): ${groups.soon.join('; ')}
+${STARLINK_STATUS_LABEL.waitlist} (${groups.waitlist.length}): ${groups.waitlist.join('; ')}
+${STARLINK_STATUS_LABEL.unavailable} (${groups.unavailable.length}): ${groups.unavailable.join('; ')}
+`;
+}
+
+// Authorized retailers. Compact format — group by continent → country, names
+// joined by commas. Source-of-truth is the Starlink article; the JSON ships
+// the latest extracted snapshot.
+function resellersBlock(resellers: StarlinkReseller[]): string {
+  if (resellers.length === 0) {
+    return '## STARLINK AUTHORIZED RETAILERS\n— not yet synced — tell the user to open the Starlink page or click Refresh now —\n';
+  }
+  const byContinent = new Map<Continent, Map<string, string[]>>();
+  for (const r of resellers) {
+    if (!byContinent.has(r.continent)) byContinent.set(r.continent, new Map());
+    const byCountry = byContinent.get(r.continent)!;
+    if (!byCountry.has(r.country)) byCountry.set(r.country, []);
+    byCountry.get(r.country)!.push(r.notes ? `${r.name} [${r.notes}]` : r.name);
+  }
+  const order: Continent[] = [
+    'Africa',
+    'Asia-Pacific',
+    'Europe',
+    'Latin America',
+    'Middle East',
+    'North America',
+    'Oceania',
+  ];
+  const lines: string[] = [];
+  for (const cont of order) {
+    const countries = byContinent.get(cont);
+    if (!countries) continue;
+    lines.push(`### ${cont}`);
+    const sorted = Array.from(countries.entries()).sort(([a], [b]) => a.localeCompare(b));
+    for (const [country, names] of sorted) {
+      lines.push(`  ${country}: ${names.join(', ')}`);
+    }
+  }
+  return `## STARLINK AUTHORIZED RETAILERS (${resellers.length}, official Starlink list)\n${lines.join('\n')}\n`;
 }
 
 function messagesBlock(m: BitchatMessage[]): string {
@@ -180,14 +228,14 @@ export function buildSystemPrompt(snap: AppSnapshot, opts: BuildOpts): string {
   return [
     `You are AidFlow Pro's organizational AI assistant, powered by Gemma 4. Always respond in ${langName}.`,
     ``,
-    `You have READ access to a snapshot of every module in the app (families, distributions, knowledge base, aid usage guides, children content library, Starlink providers, Bitchat messages, dashboard stats). You do NOT have access to user account settings or system configuration.`,
+    `You have READ access to a snapshot of every module in the app: families, distributions, knowledge base, aid usage guides, children content library, Starlink country availability + authorized retailers, Bitchat messages, and dashboard stats. You do NOT have access to user account settings or system configuration.`,
     ``,
     `## Rules`,
-    `1. Only reference data that appears in the snapshot below. Never invent IDs, names, sectors, or facts.`,
+    `1. Only reference data that appears in the snapshot below. Never invent IDs, names, countries, retailers, or facts.`,
     `2. When the user asks "which families need X in sector Y", filter the FAMILIES section by the matching attribute(s) and list family_id + head_name.`,
     `3. For prioritization questions, refer to priority_score / priority_level and explain the contributing factors (children<5, medical, days_since_last_aid, displacement, income, new_need_flagged).`,
     `4. For aid item questions, consult the AID USAGE GUIDES section. For protocol questions (medical / cholera / starvation / shelter), tell the user to enable "Search knowledge base" — that runs the RAG pipeline over uploaded PDFs and returns cited excerpts.`,
-    `5. For connectivity / map questions, use the STARLINK PROVIDERS section. Sort by signal strength when relevant.`,
+    `5. For Starlink coverage questions ("is Starlink available in X?"), use STARLINK COUNTRY AVAILABILITY. For "where can I buy Starlink in X?" or "which retailers sell Starlink in country Y", use STARLINK AUTHORIZED RETAILERS — list every retailer for the requested country exactly as written. Do not invent retailers; if the country is not in the section, say so and suggest the user check the official Starlink article.`,
     `6. For team coordination questions, use the BITCHAT section.`,
     `7. For high-level summaries, use the TODAY'S DASHBOARD section.`,
     `8. If the question requires data outside this snapshot (e.g. live outbreak alerts, weather forecasts), say so plainly. Never fabricate.`,
@@ -200,7 +248,8 @@ export function buildSystemPrompt(snap: AppSnapshot, opts: BuildOpts): string {
     documentsBlock(snap.documents),
     guidesBlock(snap.guides),
     kidsBlock(snap.kids),
-    providersBlock(snap.providers),
+    starlinkCountriesBlock(),
+    resellersBlock(snap.resellers),
     messagesBlock(snap.messages),
   ].join('\n');
 }

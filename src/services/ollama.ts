@@ -31,8 +31,11 @@ interface EmbeddingResponse {
 
 // num_ctx — how many tokens the model can see at once.
 // Gemma 4 E4B supports up to 128K, but each doubling slows inference.
-// 8192 is plenty for our full app snapshot + Wikipedia + chat history.
-const DEFAULT_NUM_CTX = 8192;
+// 16384 fits our full app snapshot (families + distributions + 240+ Starlink
+// retailers + 130 country availability + Wikipedia + chat history) with room
+// to spare; below 16K the retailers block can get truncated and the model
+// starts hallucinating retailer names.
+const DEFAULT_NUM_CTX = 16384;
 
 function getConfig() {
   const s = useSettingsStore.getState();

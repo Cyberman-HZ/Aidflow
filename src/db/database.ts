@@ -11,6 +11,7 @@ import type {
   KidsContent,
   AidGuide,
   StarlinkProvider,
+  StarlinkReseller,
   User,
   BitchatMessage,
 } from '@/types';
@@ -22,6 +23,7 @@ export class AidFlowDB extends Dexie {
   kids!: Table<KidsContent, string>;
   guides!: Table<AidGuide, string>;
   providers!: Table<StarlinkProvider, string>;
+  resellers!: Table<StarlinkReseller, string>;
   users!: Table<User, string>;
   messages!: Table<BitchatMessage, string>;
   syncQueue!: Table<{ id?: number; kind: string; payload: unknown; created_at: string }, number>;
@@ -39,6 +41,17 @@ export class AidFlowDB extends Dexie {
       users: 'user_id, role, name',
       messages: 'msg_id, channel, sent_at',
       syncQueue: '++id, kind, created_at',
+    });
+
+    // v2 — add `source` index on providers so we can efficiently wipe stale
+    //      OSM rows on each sync without touching user-added custom pins.
+    this.version(2).stores({
+      providers: 'id, country, region, type, signal, source, osm_id',
+    });
+
+    // v3 — add resellers table (synced hourly from a curated JSON file).
+    this.version(3).stores({
+      resellers: 'id, continent, country, type',
     });
   }
 }

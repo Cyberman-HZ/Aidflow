@@ -1,12 +1,24 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Sparkles, Database, Users, Package, BookOpen, HelpCircle, Smile, Map as MapIcon, MessageSquare } from 'lucide-react';
+import {
+  Sparkles,
+  Database,
+  Users,
+  Package,
+  BookOpen,
+  HelpCircle,
+  Smile,
+  Globe,
+  Store,
+  MessageSquare,
+} from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import AIChat from '@/components/AIChat';
 import { Card } from '@/components/Card';
 import { db } from '@/db/database';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { buildSystemPrompt } from '@/services/aiContext';
+import { COUNTRIES as STARLINK_COUNTRIES } from '@/services/starlinkCountries';
 
 export default function Assistant() {
   const { t } = useTranslation();
@@ -19,16 +31,16 @@ export default function Assistant() {
   const documents = useLiveQuery(() => db.documents.toArray()) ?? [];
   const guides = useLiveQuery(() => db.guides.toArray()) ?? [];
   const kids = useLiveQuery(() => db.kids.toArray()) ?? [];
-  const providers = useLiveQuery(() => db.providers.toArray()) ?? [];
+  const resellers = useLiveQuery(() => db.resellers.toArray()) ?? [];
   const messages = useLiveQuery(() => db.messages.toArray()) ?? [];
 
   const systemPrompt = useMemo(
     () =>
       buildSystemPrompt(
-        { families, distributions, documents, guides, kids, providers, messages },
+        { families, distributions, documents, guides, kids, resellers, messages },
         { language }
       ),
-    [families, distributions, documents, guides, kids, providers, messages, language]
+    [families, distributions, documents, guides, kids, resellers, messages, language]
   );
 
   const dataChips: { icon: React.ReactNode; label: string; count: number }[] = [
@@ -37,7 +49,8 @@ export default function Assistant() {
     { icon: <BookOpen size={11} />, label: 'PDFs', count: documents.length },
     { icon: <HelpCircle size={11} />, label: 'guides', count: guides.length },
     { icon: <Smile size={11} />, label: 'kids', count: kids.length },
-    { icon: <MapIcon size={11} />, label: 'providers', count: providers.length },
+    { icon: <Globe size={11} />, label: 'Starlink countries', count: STARLINK_COUNTRIES.length },
+    { icon: <Store size={11} />, label: 'Starlink retailers', count: resellers.length },
     { icon: <MessageSquare size={11} />, label: 'messages', count: messages.length },
   ];
 
@@ -88,10 +101,10 @@ export default function Assistant() {
           <Card title="Try asking">
             <ul className="text-xs text-slate-300 space-y-1.5 list-disc list-inside">
               <li>List all critical-priority families with pregnant members.</li>
-              <li>Which Starlink provider closest to Sector-B-North has strong signal?</li>
+              <li>Is Starlink available in Yemen?</li>
+              <li>Which retailers sell Starlink in Kenya?</li>
               <li>What's in our aid guide for water purification tablets?</li>
               <li>Summarize today's distributions by sector.</li>
-              <li>What kids content do we have for ages 6-10?</li>
               <li>Show me the latest Bitchat messages on #medical-team.</li>
             </ul>
           </Card>

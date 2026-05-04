@@ -1,7 +1,17 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { Search, Sparkles, RefreshCw, Users, Baby, HeartPulse, Activity } from 'lucide-react';
+import {
+  Search,
+  Sparkles,
+  RefreshCw,
+  Users,
+  Baby,
+  HeartPulse,
+  Activity,
+  ArrowUpDown,
+  X,
+} from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
 import { prioritizeFamilies } from '@/services/ollama';
@@ -11,13 +21,27 @@ import PriorityBadge from '@/components/PriorityBadge';
 import { Card } from '@/components/Card';
 import EmptyState from '@/components/EmptyState';
 import Loading from '@/components/Loading';
-import type { Family, PrioritizationResult } from '@/types';
+import type { Family, PrioritizationResult, PriorityLevel } from '@/types';
+
+type PriorityFilter = 'ALL' | PriorityLevel;
+type SortKey =
+  | 'score_desc'
+  | 'score_asc'
+  | 'name'
+  | 'id'
+  | 'members'
+  | 'children'
+  | 'last_aid_asc'
+  | 'last_aid_desc'
+  | 'sector';
 
 export default function Families() {
   const { t } = useTranslation();
   const language = useSettingsStore((s) => s.language);
   const [search, setSearch] = useState('');
   const [sectorFilter, setSectorFilter] = useState<string>('');
+  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('ALL');
+  const [sortKey, setSortKey] = useState<SortKey>('score_desc');
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<PrioritizationResult[]>([]);
 
@@ -40,6 +64,10 @@ export default function Families() {
 
   const filtered = families
     .filter((f) => !sectorFilter || f.location_sector === sectorFilter)
+    .filter((f) => {
+      if (priorityFilter === 'ALL') return true;
+      return byId.get(f.family_id)?.priority_level === priorityFilter;
+    })
     .filter(
       (f) =>
         !search ||
@@ -47,12 +75,46 @@ export default function Families() {
         f.family_id.toLowerCase().includes(search.toLowerCase())
     );
 
-  // sort by AI/rule score
+  // Sort with the selected key. Ties fall back to priority score.
+  const daysSince = (iso: string | undefined) =>
+    iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000) : Number.POSITIVE_INFINITY;
+
   filtered.sort((a, b) => {
     const sa = byId.get(a.family_id)?.priority_score ?? 0;
     const sb = byId.get(b.family_id)?.priority_score ?? 0;
-    return sb - sa;
+    switch (sortKey) {
+      case 'score_desc':
+        return sb - sa;
+      case 'score_asc':
+        return sa - sb;
+      case 'name':
+        return a.head_name.localeCompare(b.head_name);
+      case 'id':
+        return a.family_id.localeCompare(b.family_id);
+      case 'members':
+        return b.member_count - a.member_count || sb - sa;
+      case 'children':
+        return b.children_under_5 - a.children_under_5 || sb - sa;
+      case 'last_aid_asc':
+        return daysSince(b.last_aid_at) - daysSince(a.last_aid_at);
+      case 'last_aid_desc':
+        return daysSince(a.last_aid_at) - daysSince(b.last_aid_at);
+      case 'sector':
+        return a.location_sector.localeCompare(b.location_sector) || sb - sa;
+      default:
+        return 0;
+    }
   });
+
+  const hasActiveFilter =
+    !!search || !!sectorFilter || priorityFilter !== 'ALL' || sortKey !== 'score_desc';
+
+  const clearFilters = () => {
+    setSearch('');
+    setSectorFilter('');
+    setPriorityFilter('ALL');
+    setSortKey('score_desc');
+  };
 
   const runAI = async () => {
     if (running || families.length === 0) return;
@@ -100,8 +162,9 @@ export default function Families() {
       </header>
 
       <Card>
-        <div className="flex flex-col sm:flex-row gap-3 items-stretch">
-          <div className="relative flex-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Search — spans 2 cols on lg */}
+          <div className="relative lg:col-span-2">
             <Search
               size={16}
               className="absolute top-1/2 -translate-y-1/2 start-3 text-slate-500"
@@ -113,10 +176,13 @@ export default function Families() {
               className="w-full bg-surface-deep border border-slate-700 rounded-lg ps-9 pe-3 py-2 text-sm focus:border-brand outline-none touch-target"
             />
           </div>
+
+          {/* Sector */}
           <select
             value={sectorFilter}
             onChange={(e) => setSectorFilter(e.target.value)}
             className="bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand touch-target"
+            aria-label={t('families.filter_sector')}
           >
             <option value="">{t('families.filter_sector')}</option>
             {sectors.map((s) => (
@@ -125,6 +191,51 @@ export default function Families() {
               </option>
             ))}
           </select>
+
+          {/* Priority level */}
+          <select
+            value={priorityFilter}
+            onChange={(e) => setPriorityFilter(e.target.value as PriorityFilter)}
+            className="bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand touch-target"
+            aria-label={t('families.filter_priority')}
+          >
+            <option value="ALL">{t('families.filter_priority')}</option>
+            <option value="CRITICAL">{t('priority.CRITICAL')}</option>
+            <option value="HIGH">{t('priority.HIGH')}</option>
+            <option value="MEDIUM">{t('priority.MEDIUM')}</option>
+            <option value="NORMAL">{t('priority.NORMAL')}</option>
+          </select>
+        </div>
+
+        <div className="mt-3 pt-3 border-t border-slate-700 flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <ArrowUpDown size={14} className="text-slate-400" />
+            <span className="text-xs text-slate-400">{t('families.sort_by')}:</span>
+            <select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as SortKey)}
+              className="bg-surface-deep border border-slate-700 rounded-lg px-2 py-1.5 text-sm focus:border-brand"
+            >
+              <option value="score_desc">{t('families.sort_score_desc')}</option>
+              <option value="score_asc">{t('families.sort_score_asc')}</option>
+              <option value="name">{t('families.sort_name')}</option>
+              <option value="id">{t('families.sort_id')}</option>
+              <option value="members">{t('families.sort_members')}</option>
+              <option value="children">{t('families.sort_children')}</option>
+              <option value="last_aid_asc">{t('families.sort_last_aid_asc')}</option>
+              <option value="last_aid_desc">{t('families.sort_last_aid_desc')}</option>
+              <option value="sector">{t('families.sort_sector')}</option>
+            </select>
+          </label>
+
+          {hasActiveFilter && (
+            <button
+              onClick={clearFilters}
+              className="ms-auto touch-target px-3 py-1.5 bg-surface-light hover:bg-slate-600 rounded-lg text-xs flex items-center gap-1"
+            >
+              <X size={12} /> {t('distribute.filter_clear')}
+            </button>
+          )}
         </div>
       </Card>
 

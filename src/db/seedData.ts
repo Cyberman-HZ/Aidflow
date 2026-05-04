@@ -213,18 +213,11 @@ const distributions: AidDistribution[] = [
   },
 ];
 
-const providers: StarlinkProvider[] = [
-  { id: 'SL-001', name: 'Starlink Damascus Hub', country: 'Syria', region: 'Damascus', type: 'official', lat: 33.513, lng: 36.292, phone: '+963-11-555-0100', hours: '08:00–18:00', signal: 'strong' },
-  { id: 'SL-002', name: 'TechReach Reseller', country: 'Syria', region: 'Aleppo', type: 'reseller', lat: 36.202, lng: 37.134, phone: '+963-21-555-0202', hours: '09:00–17:00', signal: 'moderate' },
-  { id: 'SL-003', name: 'Beirut Connectivity Center', country: 'Lebanon', region: 'Beirut', type: 'installer', lat: 33.888, lng: 35.495, phone: '+961-1-555-0303', hours: '08:30–17:30', signal: 'strong' },
-  { id: 'SL-004', name: 'Amman Satellite Solutions', country: 'Jordan', region: 'Amman', type: 'reseller', lat: 31.945, lng: 35.928, phone: '+962-6-555-0404', hours: '09:00–18:00', signal: 'strong' },
-  { id: 'SL-005', name: 'Erbil Field Provider', country: 'Iraq', region: 'Erbil', type: 'service_point', lat: 36.191, lng: 44.009, phone: '+964-66-555-0505', hours: '07:00–19:00', signal: 'moderate' },
-  { id: 'SL-006', name: 'Khartoum Mobile Service', country: 'Sudan', region: 'Khartoum', type: 'installer', lat: 15.501, lng: 32.560, phone: '+249-1-555-0606', hours: '08:00–16:00', signal: 'weak' },
-  { id: 'SL-007', name: 'Goma Aid Hub', country: 'DRC', region: 'North Kivu', type: 'service_point', lat: -1.679, lng: 29.222, phone: '+243-99-555-0707', hours: '08:00–17:00', signal: 'moderate' },
-  { id: 'SL-008', name: 'Port-au-Prince Connect', country: 'Haiti', region: 'Ouest', type: 'reseller', lat: 18.594, lng: -72.307, phone: '+509-555-0808', hours: '09:00–17:00', signal: 'strong' },
-  { id: 'SL-009', name: 'Kabul Tech Outpost', country: 'Afghanistan', region: 'Kabul', type: 'installer', lat: 34.555, lng: 69.207, phone: '+93-20-555-0909', hours: '08:00–16:00', signal: 'weak' },
-  { id: 'SL-010', name: "Sana'a Resilience Co-op", country: 'Yemen', region: "Sana'a", type: 'service_point', lat: 15.369, lng: 44.191, phone: '+967-1-555-1010', hours: '08:00–14:00', signal: 'weak' },
-];
+// No fake provider seed. The Starlink Map page now fetches real telecom /
+// ISP / Starlink-related providers from OpenStreetMap on demand via the
+// Overpass API. The `providers` table in IndexedDB is reserved for the
+// user's own custom pins (added via the "+ Add custom pin" button).
+const providers: StarlinkProvider[] = [];
 
 const users: User[] = [
   { user_id: 'U-admin-1', name: 'Sarah Chen', role: 'admin', pin: '1234', language: 'en' },
@@ -351,6 +344,28 @@ export async function seedIfEmpty(): Promise<void> {
       await db.messages.bulkAdd(messages);
     }
   );
+}
+
+/**
+ * One-time cleanup: removes the fake "SL-001"…"SL-010" provider entries
+ * that earlier versions of the seed added to IndexedDB. Real provider
+ * lookup now happens via OpenStreetMap on demand.
+ *
+ * Safe to call on every app launch — it's a no-op if there's nothing to remove.
+ */
+export async function cleanupLegacyDemoProviders(): Promise<void> {
+  try {
+    const legacy = await db.providers
+      .where('id')
+      .startsWith('SL-')
+      .toArray();
+    if (legacy.length > 0) {
+      await db.providers.bulkDelete(legacy.map((p) => p.id));
+      console.log(`[seedData] removed ${legacy.length} legacy demo provider(s)`);
+    }
+  } catch (e) {
+    console.warn('[seedData] legacy cleanup failed', e);
+  }
 }
 
 export async function reseed(): Promise<void> {

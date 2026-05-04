@@ -97,15 +97,38 @@ export interface StarlinkProvider {
   id: string;
   name: string;
   country: string;
-  region: string;
+  region: string; // city / town / state — first non-empty admin level
   type: 'reseller' | 'installer' | 'service_point' | 'official';
   lat: number;
   lng: number;
   phone?: string;
   hours?: string;
   notes?: string;
+  /** "strong" | "moderate" | "weak" — descriptive only; OSM doesn't supply this */
   signal: 'strong' | 'moderate' | 'weak';
+  /** Set on user-added pins (preserved across syncs). */
   custom?: boolean;
+  /** Where this entry came from. 'osm' rows are wiped/refreshed on each sync. */
+  source: 'osm' | 'custom';
+  /** OSM-only metadata, used to deduplicate and link back to the source */
+  osm_id?: number;
+  osm_type?: 'node' | 'way' | 'relation';
+  source_url?: string;
+  /** ISO timestamp when this entry was last refreshed from OSM */
+  last_synced_at?: string;
+  /** True when the OSM tags clearly identify this as a Starlink-related place */
+  is_starlink_match?: boolean;
+  // -------- Address breakdown (fed by OSM tags + Nominatim reverse geocode) --------
+  street?: string;
+  housenumber?: string;
+  postcode?: string;
+  suburb?: string;
+  /** ISO 3166-1 alpha-2 country code (e.g. "US", "DE") */
+  country_code?: string;
+  /** Pre-formatted full address string for one-line display */
+  formatted_address?: string;
+  /** True when address came from Nominatim reverse-geocoding (vs raw OSM tags) */
+  address_resolved?: boolean;
 }
 
 export interface User {
@@ -126,6 +149,45 @@ export interface BitchatMessage {
 }
 
 export type ConnectivityState = 'online' | 'local' | 'disconnected';
+
+// Continents used to group authorized resellers in the UI.
+// Matches the categorization on the official Starlink retailers article:
+// https://starlink.com/support/article/8a90222d-7c32-edd7-51f6-f696ece07105
+export type Continent =
+  | 'Africa'
+  | 'Asia-Pacific'
+  | 'Europe'
+  | 'Latin America'
+  | 'Middle East'
+  | 'North America'
+  | 'Oceania';
+
+export interface StarlinkReseller {
+  id: string;
+  name: string;
+  /** "carrier" = mobile network operator (Direct-to-Cell partner), "integrator" = enterprise systems integrator, "reseller" = consumer authorized retailer */
+  type: 'carrier' | 'integrator' | 'reseller' | 'distributor';
+  continent: Continent;
+  country: string;
+  /** Country / region / state-level location of the office or retail presence */
+  region?: string;
+  address?: string;
+  website?: string;
+  phone?: string;
+  notes?: string;
+  /** URL the editor used to verify this entry — public sources only */
+  verified_source?: string;
+}
+
+export interface ResellersDataset {
+  /** Schema version of the JSON file format */
+  version: number;
+  /** ISO date the JSON was last edited */
+  updated_at: string;
+  /** Description / how-to-edit text shown in the UI */
+  source_note?: string;
+  resellers: StarlinkReseller[];
+}
 
 // Gemma 4 prioritization output (PDF Appendix D)
 export interface PrioritizationResult {
