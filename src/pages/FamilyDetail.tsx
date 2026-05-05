@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, MapPin, Heart, Users, Baby, Sparkles, Calendar } from 'lucide-react';
+import { ArrowLeft, MapPin, Heart, Users, Baby, Sparkles, Calendar, CheckCircle2 } from 'lucide-react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
 import { computeRuleScore } from '@/services/priorityRules';
 import { Card } from '@/components/Card';
 import PriorityBadge from '@/components/PriorityBadge';
+import StatusBadge from '@/components/StatusBadge';
 import EmptyState from '@/components/EmptyState';
 import AIChat from '@/components/AIChat';
 import type { Family, AidDistribution } from '@/types';
@@ -13,19 +14,31 @@ import type { Family, AidDistribution } from '@/types';
 export default function FamilyDetail() {
   const { id } = useParams();
   const { t } = useTranslation();
-  const [family, setFamily] = useState<Family | null>(null);
-  const [history, setHistory] = useState<AidDistribution[]>([]);
 
-  useEffect(() => {
-    if (!id) return;
-    void db.families.get(id).then((f) => f && setFamily(f));
-    void db.distributions
-      .where('family_id')
-      .equals(id)
-      .reverse()
-      .sortBy('distributed_at')
-      .then(setHistory);
-  }, [id]);
+  // Live queries — auto-refresh whenever the underlying tables change
+  // (e.g. after a delivery confirmed in the Distribute tab).
+  const family = useLiveQuery(
+    () => (id ? db.families.get(id) : undefined),
+    [id]
+  ) as Family | undefined;
+  const history =
+    useLiveQuery(
+      () =>
+        id
+          ? db.distributions
+              .where('family_id')
+              .equals(id)
+              .toArray()
+              .then((rows) =>
+                rows.sort((a, b) =>
+                  (b.delivered_at ?? b.created_at ?? '').localeCompare(
+                    a.delivered_at ?? a.created_at ?? ''
+                  )
+                )
+              )
+          : Promise.resolve([] as AidDistribution[]),
+      [id]
+    ) ?? [];
 
   if (!family) {
     return (
@@ -53,9 +66,12 @@ export default function FamilyDetail() {
       <header className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">{family.head_name}</h1>
-          <div className="text-sm text-slate-400">
-            {t('family_detail.title', { id: family.family_id })} ·{' '}
-            <MapPin size={12} className="inline" /> {family.location_sector}
+          <div className="text-sm text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span>{t('family_detail.title', { id: family.family_id })}</span>
+            <span>·</span>
+            <span><MapPin size={12} className="inline" /> {family.location_sector}</span>
+            <span>·</span>
+            <LastAidIndicator lastAidAt={family.last_aid_at} />
           </div>
         </div>
         <PriorityBadge level={level} score={score} size="lg" />
@@ -130,13 +146,18 @@ export default function FamilyDetail() {
             <ul className="divide-y divide-slate-700">
               {history.map((d) => (
                 <li key={d.distribution_id} className="py-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
+                  <div className="flex items-start justify-between gap-2 flex-wrap">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <StatusBadge status={d.status} size="sm" />
+                        <span className="text-xs text-slate-500">{d.distribution_id}</span>
+                      </div>
                       <div className="text-sm">
                         {d.items_distributed.map((i) => `${i.item_name} ×${i.quantity}`).join(', ')}
                       </div>
                       <div className="text-xs text-slate-400 mt-0.5">
-                        {new Date(d.distributed_at).toLocaleDateString()} · {d.distributed_by}
+                        {new Date(d.delivered_at ?? d.created_at ?? '').toLocaleDateString()}{' '}
+                        · {d.delivered_by ?? d.assigned_to ?? d.distributed_by ?? '—'}
                       </div>
                     </div>
                     <PriorityBadge
@@ -152,6 +173,11 @@ export default function FamilyDetail() {
                   {d.post_update_notes && (
                     <p className="text-xs text-slate-300 mt-1.5 bg-surface-light px-3 py-1.5 rounded">
                       {d.post_update_notes}
+                    </p>
+                  )}
+                  {d.failure_reason && (
+                    <p className="text-xs text-priority-critical mt-1.5 italic">
+                      {d.status === 'failed' ? 'Failed: ' : 'Cancelled: '}{d.failure_reason}
                     </p>
                   )}
                 </li>
@@ -178,6 +204,23 @@ export default function FamilyDetail() {
         </div>
       </div>
     </div>
+  );
+}
+
+function LastAidIndicator({ lastAidAt }: { lastAidAt?: string }) {
+  if (!lastAidAt) {
+    return <span className="text-priority-medium">Last aid: never</span>;
+  }
+  const days = Math.floor((Date.now() - new Date(lastAidAt).getTime()) / 86_400_000);
+  const label =
+    days <= 0 ? 'served today' : days === 1 ? 'served yesterday' : `${days}d ago`;
+  const colorClass =
+    days < 3 ? 'text-priority-normal' : days < 7 ? 'text-priority-medium' : 'text-priority-high';
+  return (
+    <span className={`flex items-center gap-1 ${colorClass}`}>
+      {days < 3 && <CheckCircle2 size={12} />}
+      Last aid: {label}
+    </span>
   );
 }
 

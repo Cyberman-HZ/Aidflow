@@ -68,11 +68,18 @@ export default function Dashboard() {
 
   // ---- Derived data --------------------------------------------------------
   const today = new Date().toISOString().slice(0, 10);
-  const todayDistros = distributions.filter((d) => d.distributed_at.slice(0, 10) === today);
+  const todayDistros = distributions.filter(
+    (d) =>
+      d.status === 'delivered' &&
+      (d.delivered_at ?? d.created_at ?? '').slice(0, 10) === today
+  );
   const totalItemsToday = todayDistros.reduce(
     (sum, d) => sum + d.items_distributed.reduce((s, it) => s + it.quantity, 0),
     0
   );
+  const activeOrders = distributions.filter(
+    (d) => d.status === 'pending' || d.status === 'out_for_delivery'
+  ).length;
 
   const scored = useMemo(
     () =>
@@ -91,10 +98,11 @@ export default function Dashboard() {
     value: scored.filter((f) => f.level === lvl).length,
   }));
 
-  // Distributions per sector (bar)
+  // Distributions per sector (bar) — only count delivered, not pending/cancelled
   const sectorData = useMemo(() => {
     const map = new Map<string, number>();
     for (const d of distributions) {
+      if (d.status !== 'delivered') continue;
       const sector =
         families.find((f) => f.family_id === d.family_id)?.location_sector ?? 'Unknown';
       map.set(sector, (map.get(sector) ?? 0) + 1);
@@ -102,7 +110,7 @@ export default function Dashboard() {
     return Array.from(map, ([sector, count]) => ({ sector, count }));
   }, [families, distributions]);
 
-  // Distributions over time (last 14 days, line chart from /reports)
+  // Distributions over time (last 14 days, line chart from /reports) — count deliveries
   const timeData = useMemo(() => {
     const days: { day: string; count: number }[] = [];
     for (let i = 13; i >= 0; i--) {
@@ -110,14 +118,20 @@ export default function Dashboard() {
       const key = d.toISOString().slice(0, 10);
       days.push({
         day: key.slice(5),
-        count: distributions.filter((x) => x.distributed_at.slice(0, 10) === key).length,
+        count: distributions.filter(
+          (x) =>
+            x.status === 'delivered' &&
+            (x.delivered_at ?? x.created_at ?? '').slice(0, 10) === key
+        ).length,
       });
     }
     return days;
   }, [distributions]);
 
   const recentDistros = [...distributions]
-    .sort((a, b) => b.distributed_at.localeCompare(a.distributed_at))
+    .sort((a, b) =>
+      (b.delivered_at ?? b.created_at ?? '').localeCompare(a.delivered_at ?? a.created_at ?? '')
+    )
     .slice(0, 6);
 
   const aiStatus =
@@ -131,15 +145,9 @@ export default function Dashboard() {
 
   const exportCSV = () => {
     const headers = [
-      'distribution_id',
-      'family_id',
-      'family_name',
-      'sector',
-      'distributed_at',
-      'distributed_by',
-      'items',
-      'priority_score',
-      'flag',
+      'distribution_id', 'family_id', 'family_name', 'sector', 'status',
+      'created_at', 'delivered_at', 'delivered_by',
+      'items', 'priority_score', 'flag', 'failure_reason',
     ];
     const rows = distributions.map((d) => {
       const f = families.find((x) => x.family_id === d.family_id);
@@ -148,11 +156,14 @@ export default function Dashboard() {
         d.family_id,
         f?.head_name ?? '',
         f?.location_sector ?? '',
-        d.distributed_at,
-        d.distributed_by,
+        d.status,
+        d.created_at,
+        d.delivered_at ?? '',
+        d.delivered_by ?? d.distributed_by ?? '',
         d.items_distributed.map((i) => `${i.item_name} x${i.quantity}`).join('; '),
         d.ai_priority_score,
         d.new_needs_flagged ? 'yes' : '',
+        d.failure_reason ?? '',
       ].map((v) => `"${String(v).replaceAll('"', '""')}"`);
     });
     const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
@@ -226,18 +237,25 @@ export default function Dashboard() {
       </header>
 
       {/* KPI cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           label={t('dashboard.kpi_families')}
           value={todayDistros.length}
-          hint={`${families.length} total tracked`}
+          hint={`${families.length} families tracked`}
           accent="brand"
           icon={<Users size={18} />}
         />
         <StatCard
+          label="Active orders"
+          value={activeOrders}
+          hint="pending + out for delivery"
+          accent="medium"
+          icon={<Package size={18} />}
+        />
+        <StatCard
           label={t('dashboard.kpi_items')}
           value={totalItemsToday}
-          hint={`${distributions.length} all-time`}
+          hint={`${distributions.filter((d) => d.status === 'delivered').length} delivered all-time`}
           accent="normal"
           icon={<Package size={18} />}
         />

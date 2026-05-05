@@ -81,15 +81,42 @@ function familiesBlock(families: Family[]): string {
 
 function distributionsBlock(d: AidDistribution[], families: Family[]): string {
   if (d.length === 0) return '## DISTRIBUTIONS\n— none —\n';
-  const recent = [...d].sort((a, b) => b.distributed_at.localeCompare(a.distributed_at)).slice(0, 25);
   const familyMap = new Map(families.map((f) => [f.family_id, f.head_name]));
-  const lines = recent.map(
-    (x) =>
-      `${x.distribution_id} | family:${x.family_id} (${familyMap.get(x.family_id) ?? '?'}) | when:${x.distributed_at.slice(0, 10)} | items:${x.items_distributed
-        .map((i) => `${i.item_name}×${i.quantity}`)
-        .join(', ')} | by:${x.distributed_by}${x.new_needs_flagged ? ' | NEW_NEED_FLAGGED' : ''}${x.post_update_notes ? ` | notes:"${x.post_update_notes}"` : ''}`
-  );
-  return `## DISTRIBUTIONS (${d.length}, showing last ${recent.length})\n${lines.join('\n')}\n`;
+
+  // Split into active (pending + out_for_delivery) vs completed
+  const active = d.filter((x) => x.status === 'pending' || x.status === 'out_for_delivery');
+  const closed = d.filter((x) => x.status !== 'pending' && x.status !== 'out_for_delivery');
+
+  const fmtActive = (x: AidDistribution) => {
+    const ageMin = Math.round((Date.now() - new Date(x.created_at).getTime()) / 60000);
+    const age = ageMin < 60 ? `${ageMin}m` : ageMin < 1440 ? `${Math.round(ageMin / 60)}h` : `${Math.round(ageMin / 1440)}d`;
+    const sched = x.scheduled_for ? ` | scheduled:${x.scheduled_for.slice(0, 16).replace('T', ' ')}` : '';
+    const assigned = x.assigned_to ? ` | assigned:${x.assigned_to}` : ' | UNASSIGNED';
+    return `${x.distribution_id} [${x.status.toUpperCase()}] | family:${x.family_id} (${familyMap.get(x.family_id) ?? '?'}) | created:${age}_ago${assigned}${sched} | items:${x.items_distributed.map((i) => `${i.item_name}×${i.quantity}`).join(', ')}${x.notes ? ` | notes:"${x.notes}"` : ''}`;
+  };
+
+  const fmtClosed = (x: AidDistribution) => {
+    const when = (x.delivered_at || x.closed_at || x.created_at).slice(0, 10);
+    const who = x.delivered_by ?? x.assigned_to ?? '?';
+    const reason = x.failure_reason ? ` | reason:"${x.failure_reason}"` : '';
+    const flag = x.new_needs_flagged ? ' | NEW_NEED_FLAGGED' : '';
+    const notes = x.post_update_notes ? ` | notes:"${x.post_update_notes}"` : '';
+    return `${x.distribution_id} [${x.status.toUpperCase()}] | family:${x.family_id} (${familyMap.get(x.family_id) ?? '?'}) | when:${when} | by:${who}${reason}${flag}${notes}`;
+  };
+
+  const recentClosed = [...closed]
+    .sort((a, b) =>
+      (b.delivered_at || b.closed_at || b.created_at).localeCompare(a.delivered_at || a.closed_at || a.created_at)
+    )
+    .slice(0, 25);
+
+  return [
+    `## ACTIVE DISTRIBUTION ORDERS (${active.length}: ${active.filter((x) => x.status === 'pending').length} pending + ${active.filter((x) => x.status === 'out_for_delivery').length} out-for-delivery)`,
+    active.length === 0 ? '— none —' : active.map(fmtActive).join('\n'),
+    ``,
+    `## DISTRIBUTION HISTORY (${closed.length} closed, showing last ${recentClosed.length})`,
+    recentClosed.length === 0 ? '— none —' : recentClosed.map(fmtClosed).join('\n'),
+  ].join('\n') + '\n';
 }
 
 function documentsBlock(docs: KnowledgeDocument[]): string {
@@ -187,10 +214,13 @@ function messagesBlock(m: BitchatMessage[]): string {
 
 function dashboardBlock(snap: AppSnapshot): string {
   const today = new Date().toISOString().slice(0, 10);
-  const todayCount = snap.distributions.filter((d) => d.distributed_at.slice(0, 10) === today).length;
-  const itemsToday = snap.distributions
-    .filter((d) => d.distributed_at.slice(0, 10) === today)
-    .reduce((s, d) => s + d.items_distributed.reduce((a, b) => a + b.quantity, 0), 0);
+  const deliveredToday = snap.distributions.filter(
+    (d) => d.status === 'delivered' && (d.delivered_at ?? d.created_at).slice(0, 10) === today
+  );
+  const itemsToday = deliveredToday.reduce(
+    (s, d) => s + d.items_distributed.reduce((a, b) => a + b.quantity, 0),
+    0
+  );
   const buckets = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, NORMAL: 0 };
   for (const f of snap.families) {
     const score = (f.priority_score ?? computeRuleScore(f).priority_score) | 0;
@@ -198,13 +228,26 @@ function dashboardBlock(snap: AppSnapshot): string {
     buckets[lvl] += 1;
   }
   const sectors = Array.from(new Set(snap.families.map((f) => f.location_sector)));
+
+  // Status counts across all distributions
+  const statusCounts = { pending: 0, out_for_delivery: 0, delivered: 0, failed: 0, cancelled: 0 };
+  for (const d of snap.distributions) statusCounts[d.status] += 1;
+
+  // "Stuck" = out_for_delivery for > 24h
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const stuck = snap.distributions.filter(
+    (d) => d.status === 'out_for_delivery' && d.dispatched_at && new Date(d.dispatched_at).getTime() < cutoff
+  ).length;
+
   return `## TODAY'S DASHBOARD
 date:${today}
 families_tracked:${snap.families.length}
-distributions_today:${todayCount}
-items_distributed_today:${itemsToday}
+deliveries_today:${deliveredToday.length}
+items_delivered_today:${itemsToday}
 sectors_active:${sectors.length} [${sectors.join(', ')}]
 priority_buckets: CRITICAL=${buckets.CRITICAL}, HIGH=${buckets.HIGH}, MEDIUM=${buckets.MEDIUM}, NORMAL=${buckets.NORMAL}
+order_status: pending=${statusCounts.pending}, out_for_delivery=${statusCounts.out_for_delivery}, delivered=${statusCounts.delivered}, failed=${statusCounts.failed}, cancelled=${statusCounts.cancelled}
+stuck_orders_24h+:${stuck}
 new_needs_flagged:${snap.families.filter((f) => f.new_need_flagged).length}
 `;
 }
@@ -236,10 +279,11 @@ export function buildSystemPrompt(snap: AppSnapshot, opts: BuildOpts): string {
     `3. For prioritization questions, refer to priority_score / priority_level and explain the contributing factors (children<5, medical, days_since_last_aid, displacement, income, new_need_flagged).`,
     `4. For aid item questions, consult the AID USAGE GUIDES section. For protocol questions (medical / cholera / starvation / shelter), tell the user to enable "Search knowledge base" — that runs the RAG pipeline over uploaded PDFs and returns cited excerpts.`,
     `5. For Starlink coverage questions ("is Starlink available in X?"), use STARLINK COUNTRY AVAILABILITY. For "where can I buy Starlink in X?" or "which retailers sell Starlink in country Y", use STARLINK AUTHORIZED RETAILERS — list every retailer for the requested country exactly as written. Do not invent retailers; if the country is not in the section, say so and suggest the user check the official Starlink article.`,
-    `6. For team coordination questions, use the BITCHAT section.`,
-    `7. For high-level summaries, use the TODAY'S DASHBOARD section.`,
-    `8. If the question requires data outside this snapshot (e.g. live outbreak alerts, weather forecasts), say so plainly. Never fabricate.`,
-    `9. Be concise. Use bulleted lists when listing multiple records. Avoid markdown tables.`,
+    `6. For distribution operations questions: use ACTIVE DISTRIBUTION ORDERS for "what's pending/in-progress", "who is unassigned", "which orders are stuck", "today's workload by team". Use DISTRIBUTION HISTORY for "what was delivered last week", "which deliveries failed", "delivery success rate by sector". Always refer to orders by distribution_id and family_id. When suggesting actions (dispatch / cancel / reassign), describe them clearly so the supervisor can perform them in the Distribute tab.`,
+    `7. For team coordination questions, use the BITCHAT section.`,
+    `8. For high-level summaries, use the TODAY'S DASHBOARD section. The "stuck_orders_24h+" field flags orders that have been out_for_delivery for more than a day — surface these proactively when relevant.`,
+    `9. If the question requires data outside this snapshot (e.g. live outbreak alerts, weather forecasts), say so plainly. Never fabricate.`,
+    `10. Be concise. Use bulleted lists when listing multiple records. Avoid markdown tables.`,
     ``,
     `# APP SNAPSHOT`,
     dashboardBlock(snap),

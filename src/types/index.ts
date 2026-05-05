@@ -35,17 +35,53 @@ export interface Family {
   new_need_flagged?: boolean;
 }
 
+// Lifecycle of an aid distribution order
+//   pending          → created, not yet dispatched to a team
+//   out_for_delivery → assigned + dispatched, team is en route
+//   delivered        → confirmed delivered to the family (terminal)
+//   failed           → attempted but couldn't deliver (family not home, etc.) (terminal)
+//   cancelled        → cancelled before completion (terminal)
+export type DistributionStatus =
+  | 'pending'
+  | 'out_for_delivery'
+  | 'delivered'
+  | 'failed'
+  | 'cancelled';
+
 export interface AidDistribution {
   distribution_id: string;
   family_id: string;
   session_id: string;
+  status: DistributionStatus;
   items_distributed: { item_name: string; quantity: number; category: string }[];
-  distributed_by: string;
-  distributed_at: string;
+
+  // Lifecycle timestamps
+  created_at: string;                // when the order was created
+  created_by: string;                // user_id of creator (admin / supervisor / data manager)
+  scheduled_for?: string;            // optional planned delivery datetime (ISO)
+  dispatched_at?: string;            // set when status moved to out_for_delivery
+  delivered_at?: string;             // set when status moved to delivered (the legacy "distributed_at")
+  closed_at?: string;                // set on failed / cancelled
+
+  // People
+  assigned_to?: string;              // user_id of the field worker / team responsible
+  delivered_by?: string;             // user_id who actually confirmed delivery
+
+  // AI inputs at creation time
   ai_priority_score: number;
   ai_reasoning: string;
-  post_update_notes: string;
-  new_needs_flagged: boolean;
+
+  // Notes
+  notes?: string;                    // pre-delivery notes from creator
+  post_update_notes?: string;        // post-delivery field notes
+  failure_reason?: string;           // populated when status === 'failed' or 'cancelled'
+  new_needs_flagged?: boolean;       // field worker flagged new urgent needs
+
+  // -------- Legacy fields kept for backward compatibility with v1 rows ----
+  /** @deprecated Use `delivered_by` (post-delivery) or `assigned_to` (pre-delivery) */
+  distributed_by?: string;
+  /** @deprecated Use `delivered_at` (post-delivery) or `created_at` (pre-delivery) */
+  distributed_at?: string;
 }
 
 export interface KnowledgeDocument {

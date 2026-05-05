@@ -53,6 +53,29 @@ export class AidFlowDB extends Dexie {
     this.version(3).stores({
       resellers: 'id, continent, country, type',
     });
+
+    // v4 — distribution status lifecycle. Add `status`, `assigned_to`,
+    //      `created_at` indexes for filtering. Migrate v1 rows: any
+    //      existing distribution without a status is treated as 'delivered'
+    //      (since the legacy schema only recorded actual deliveries).
+    this.version(4)
+      .stores({
+        distributions:
+          'distribution_id, family_id, session_id, status, assigned_to, created_at, delivered_at, distributed_at',
+      })
+      .upgrade(async (tx) => {
+        const table = tx.table('distributions');
+        await table.toCollection().modify((d: any) => {
+          if (!d.status) {
+            // Legacy rows recorded immediate deliveries
+            d.status = 'delivered';
+            d.delivered_at = d.delivered_at ?? d.distributed_at ?? new Date().toISOString();
+            d.delivered_by = d.delivered_by ?? d.distributed_by;
+            d.created_at = d.created_at ?? d.delivered_at;
+            d.created_by = d.created_by ?? d.distributed_by ?? 'system';
+          }
+        });
+      });
   }
 }
 

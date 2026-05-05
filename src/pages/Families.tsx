@@ -11,6 +11,7 @@ import {
   Activity,
   ArrowUpDown,
   X,
+  Package,
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
@@ -269,6 +270,12 @@ function FamilyRow({ family, result }: { family: Family; result?: Prioritization
     ? Math.floor((Date.now() - new Date(family.last_aid_at).getTime()) / 86_400_000)
     : null;
 
+  // Prefer AI-cached recommended items if present; otherwise rule-engine output.
+  const items =
+    family.recommended_items && family.recommended_items.length > 0
+      ? family.recommended_items
+      : result?.recommended_items ?? [];
+
   return (
     <Link
       to={`/families/${family.family_id}`}
@@ -306,6 +313,24 @@ function FamilyRow({ family, result }: { family: Family; result?: Prioritization
           </div>
           {result?.reason && (
             <p className="text-xs text-ai mt-1.5 italic line-clamp-2">{result.reason}</p>
+          )}
+          {items.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1">
+                <Package size={11} /> {t('families.needs')}:
+              </span>
+              {items.slice(0, 6).map((item, i) => (
+                <span
+                  key={i}
+                  className="text-[11px] bg-ai/15 text-ai border border-ai/30 px-2 py-0.5 rounded-full"
+                >
+                  {item}
+                </span>
+              ))}
+              {items.length > 6 && (
+                <span className="text-[11px] text-slate-500">+{items.length - 6} more</span>
+              )}
+            </div>
           )}
         </div>
         <div className="text-2xl font-bold tabular-nums" style={{ color: colorForLevel(level) }}>

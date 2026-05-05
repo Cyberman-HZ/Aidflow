@@ -59,9 +59,15 @@ export function computeRuleScore(family: Family): PrioritizationResult {
   const days = family.last_aid_at
     ? Math.floor((Date.now() - new Date(family.last_aid_at).getTime()) / 86_400_000)
     : 30;
-  if (days >= 0 && days < 3) {
-    score -= 30;
-    reasons.push(`served ${days}d ago`);
+  if (days >= 0 && days < 5) {
+    // Multiplicative damping so the score visibly drops even for very vulnerable
+    // families whose raw score would otherwise saturate at 100. Recovers over 5 days.
+    //   day0 → ×0.5   day1 → ×0.6   day2 → ×0.7   day3 → ×0.8   day4 → ×0.9
+    const damping = 0.5 + days * 0.1;
+    score = Math.round(score * damping);
+    const label =
+      days === 0 ? 'served today' : days === 1 ? 'served yesterday' : `served ${days}d ago`;
+    reasons.push(label);
   } else {
     score += days * 2;
     reasons.push(`${days} days without aid`);
