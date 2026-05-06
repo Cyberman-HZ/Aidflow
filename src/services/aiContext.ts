@@ -1,13 +1,4 @@
 // Builds the global system-prompt context that the AI Assistant uses.
-//
-// Goal: give Gemma 4 read-access to every module's data — families, distributions,
-// uploaded knowledge documents, aid usage guides, children content library,
-// Starlink country availability + authorized retailers, Bitchat channels, and
-// computed dashboard stats — EXCEPT app Settings (per the user's request).
-//
-// Heavy media (base64 image/video data, PDF bodies) is intentionally excluded.
-// PDF content remains queryable via the RAG pipeline triggered by the
-// "Search knowledge base" toggle.
 
 import { db } from '@/db/database';
 import { computeRuleScore } from '@/services/priorityRules';
@@ -55,8 +46,6 @@ export async function loadAppSnapshot(): Promise<AppSnapshot> {
   return { families, distributions, workers, documents, guides, kids, resellers, messages };
 }
 
-// ---- Per-section serializers --------------------------------------------
-
 function familiesBlock(families: Family[]): string {
   if (families.length === 0) return '## FAMILIES\n— none —\n';
   const lines = families.map((f) => {
@@ -76,6 +65,10 @@ function familiesBlock(families: Family[]): string {
       `income:${f.income_level}`,
       `last_aid:${days === null ? 'never' : days + 'd ago'}`,
       `priority:${r.priority_score}/${r.priority_level}`,
+      f.new_need_flagged ? `NEW_NEED_FLAGGED` : '',
+      f.recommended_items?.length ? `next_needs:[${f.recommended_items.join(', ')}]` : '',
+      f.last_medical_notes ? `last_medical:"${f.last_medical_notes}"` : '',
+      f.last_delivery_notes ? `last_delivery_notes:"${f.last_delivery_notes}"` : '',
       f.notes ? `notes:"${f.notes}"` : '',
     ]
       .filter(Boolean)
@@ -84,9 +77,6 @@ function familiesBlock(families: Family[]): string {
   return `## FAMILIES (${families.length})\n${lines.join('\n')}\n`;
 }
 
-// Helper — render a single distribution order with EVERY field on the card so
-// the assistant can answer any question about any order ("show me ORD-007",
-// "who delivered the order to Ahmed last week", "why did D-… fail").
 function fmtFullOrder(
   x: AidDistribution,
   familyMap: Map<string, Family>,
@@ -144,7 +134,6 @@ function distributionsBlock(d: AidDistribution[], families: Family[], workers: W
   const familyMap = new Map(families.map((f) => [f.family_id, f]));
   const workerMap = new Map(workers.map((w) => [w.id, w]));
 
-  // Split into active (pending + out_for_delivery) vs completed
   const active = d.filter((x) => x.status === 'pending' || x.status === 'out_for_delivery');
   const closed = d.filter((x) => x.status !== 'pending' && x.status !== 'out_for_delivery');
 
@@ -176,8 +165,6 @@ function workersBlock(workers: Worker[], distributions: AidDistribution[]): stri
     return '## WORKERS\n— no workers in the database — tell the user to add one in the Workers tab —\n';
   }
 
-  // Compute per-worker stats so the assistant can answer "who is the busiest
-  // field worker", "show me Tariq's history", etc.
   const stats = new Map<string, { active: number; out: number; delivered: number; failed: number; total: number }>();
   for (const w of workers) {
     stats.set(w.id, { active: 0, out: 0, delivered: 0, failed: 0, total: 0 });
@@ -212,7 +199,7 @@ function workersBlock(workers: Worker[], distributions: AidDistribution[]): stri
 
 function documentsBlock(docs: KnowledgeDocument[]): string {
   if (docs.length === 0) {
-    return '## KNOWLEDGE BASE\n— no PDFs uploaded —\n(Tell the user they can upload protocol PDFs in the Knowledge Base page; you can then cite them via the Search knowledge base toggle.)\n';
+    return '## KNOWLEDGE BASE\n— no PDFs uploaded —\n';
   }
   const lines = docs.map(
     (d) =>
@@ -239,7 +226,6 @@ function kidsBlock(kids: KidsContent[]): string {
   return `## CHILDREN CONTENT LIBRARY (${kids.length}, metadata only)\n${lines.join('\n')}\n`;
 }
 
-// Country availability (static curated snapshot, ~130 countries).
 function starlinkCountriesBlock(): string {
   const groups = { available: [] as string[], soon: [] as string[], waitlist: [] as string[], unavailable: [] as string[] };
   for (const c of STARLINK_COUNTRIES) {
@@ -254,9 +240,6 @@ ${STARLINK_STATUS_LABEL.unavailable} (${groups.unavailable.length}): ${groups.un
 `;
 }
 
-// Authorized retailers. Compact format — group by continent → country, names
-// joined by commas. Source-of-truth is the Starlink article; the JSON ships
-// the latest extracted snapshot.
 function resellersBlock(resellers: StarlinkReseller[]): string {
   if (resellers.length === 0) {
     return '## STARLINK AUTHORIZED RETAILERS\n— not yet synced — tell the user to open the Starlink page or click Refresh now —\n';
@@ -322,11 +305,9 @@ function dashboardBlock(snap: AppSnapshot): string {
   }
   const sectors = Array.from(new Set(snap.families.map((f) => f.location_sector)));
 
-  // Status counts across all distributions
   const statusCounts = { pending: 0, out_for_delivery: 0, delivered: 0, failed: 0, cancelled: 0 };
   for (const d of snap.distributions) statusCounts[d.status] += 1;
 
-  // "Stuck" = out_for_delivery for > 24h
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   const stuck = snap.distributions.filter(
     (d) => d.status === 'out_for_delivery' && d.dispatched_at && new Date(d.dispatched_at).getTime() < cutoff
@@ -344,8 +325,6 @@ stuck_orders_24h+:${stuck}
 new_needs_flagged:${snap.families.filter((f) => f.new_need_flagged).length}
 `;
 }
-
-// ---- Top-level prompt builder -------------------------------------------
 
 interface BuildOpts {
   language: 'en' | 'ar' | 'fr' | 'es';
@@ -369,14 +348,14 @@ export function buildSystemPrompt(snap: AppSnapshot, opts: BuildOpts): string {
     `## Rules`,
     `1. Only reference data that appears in the snapshot below. Never invent IDs, names, countries, retailers, order numbers, or facts.`,
     `2. When the user asks "which families need X in sector Y", filter the FAMILIES section by the matching attribute(s) and list family_id + head_name.`,
-    `3. For prioritization questions, refer to priority_score / priority_level and explain the contributing factors (children<5, medical, days_since_last_aid, displacement, income, new_need_flagged).`,
-    `4. For aid item questions, consult the AID USAGE GUIDES section. For protocol questions (medical / cholera / starvation / shelter), tell the user to enable "Search knowledge base" — that runs the RAG pipeline over uploaded PDFs and returns cited excerpts.`,
-    `5. For Starlink coverage questions ("is Starlink available in X?"), use STARLINK COUNTRY AVAILABILITY. For "where can I buy Starlink in X?" or "which retailers sell Starlink in country Y", use STARLINK AUTHORIZED RETAILERS — list every retailer for the requested country exactly as written. Do not invent retailers; if the country is not in the section, say so and suggest the user check the official Starlink article.`,
-    `6. For ANY question about a distribution order (e.g. "show me ORD-007", "what's in order D-…", "who delivered to the Ahmed family", "why did the order to family F-… fail", "what items were in last week's delivery to sector Z"), look up the matching order in ACTIVE DISTRIBUTION ORDERS or DISTRIBUTION HISTORY and report EVERY relevant field shown on its card: ORD-### number, distribution_id, status, family + sector, items + quantities, AI priority score and reasoning at creation, all timestamps (created / scheduled / dispatched / delivered / closed), assigned worker, delivering worker, pre-delivery and post-delivery notes, and any failure reason or new-need flag. Always lead with the ORD-### number — that's how field staff identify orders.`,
-    `7. For workers questions ("who is available", "who is the busiest", "show me Tariq's history", "list all drivers"), use the WORKERS section. Workers are field staff (Field Worker / Supervisor / Driver / Medical Officer / etc.) who deliver orders — they are different from app login users and don't authenticate. Refer to them by "First Last (Position)" not by their internal W-… id.`,
+    `3. For prioritization questions, refer to priority_score / priority_level and explain the contributing factors.`,
+    `4. For aid item questions, consult the AID USAGE GUIDES section. For protocol questions, tell the user to enable "Search knowledge base".`,
+    `5. For Starlink coverage questions, use STARLINK COUNTRY AVAILABILITY. For retailer questions, use STARLINK AUTHORIZED RETAILERS.`,
+    `6. For ANY question about a distribution order, look up the matching order and report EVERY relevant field. Always lead with the ORD-### number.`,
+    `7. For workers questions, use the WORKERS section. Refer to them by "First Last (Position)" not by their internal W-… id.`,
     `8. For team coordination questions, use the BITCHAT section.`,
-    `9. For high-level summaries, use the TODAY'S DASHBOARD section. The "stuck_orders_24h+" field flags orders that have been out_for_delivery for more than a day — surface these proactively when relevant.`,
-    `10. If the question requires data outside this snapshot (e.g. live outbreak alerts, weather forecasts), say so plainly. Never fabricate.`,
+    `9. For high-level summaries, use the TODAY'S DASHBOARD section.`,
+    `10. If the question requires data outside this snapshot, say so plainly. Never fabricate.`,
     `11. Be concise. Use bulleted lists when listing multiple records. Avoid markdown tables.`,
     ``,
     `# APP SNAPSHOT`,

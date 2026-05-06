@@ -3,13 +3,32 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Sparkles, Send, BookOpen, Globe, ExternalLink } from 'lucide-react';
+import {
+  Sparkles,
+  Send,
+  BookOpen,
+  Globe,
+  ExternalLink,
+  CheckCircle2,
+  X as XIcon,
+  AlertTriangle,
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatMessage } from '@/types';
+import type { ChatMessage, Family } from '@/types';
 import { chatStream, chat } from '@/services/ollama';
 import { ragAnswerStream } from '@/services/rag';
 import { wikipediaContext } from '@/services/webSearch';
+import {
+  applyFamilyAction,
+  buildFamilyActionPrompt,
+  describeFamilyAction,
+  parseFamilyActions,
+  stripFamilyActions,
+  type FamilyAction,
+} from '@/services/familyActions';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '@/db/database';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useConnectivityStore } from '@/stores/connectivityStore';
 
@@ -22,6 +41,12 @@ interface AIChatProps {
   contextLabel?: string;
   /** When true the chat fills its container */
   flex?: boolean;
+  /**
+   * Enable AI-proposed edits for this family. When set, the chat appends an
+   * action protocol to the system prompt and renders Apply/Discard cards
+   * under any assistant message that proposes mutations.
+   */
+  family?: Family;
 }
 
 export default function AIChat({
@@ -32,6 +57,7 @@ export default function AIChat({
   placeholder,
   contextLabel,
   flex = true,
+  family,
 }: AIChatProps) {
   const { t } = useTranslation();
   const language = useSettingsStore((s) => s.language);
@@ -42,6 +68,25 @@ export default function AIChat({
   const [useRag, setUseRag] = useState(false);
   const [useWiki, setUseWiki] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Tracks the lifecycle of each AI-proposed family action by message index.
+  //   pending     — awaiting Apply / Discard
+  //   applied     — successfully written to IndexedDB
+  //   discarded   — user declined
+  //   failed      — apply threw (error stored in errorByKey)
+  type ActionStatus = 'pending' | 'applied' | 'discarded' | 'failed';
+  const [actionStatus, setActionStatus] = useState<Record<string, ActionStatus>>({});
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
+
+  // Live list of distinct sectors used across all families. Passed into the
+  // AI action prompt so Gemma 4 can only propose sector changes to values
+  // that actually exist (closed-set validation). Only fetches when the chat
+  // is family-scoped; otherwise it returns an empty array.
+  const sectorsLive = useLiveQuery<string[]>(async () => {
+    if (!family) return [];
+    const all = await db.families.toArray();
+    return all.map((f) => f.location_sector).filter((s): s is string => !!s);
+  }, [family?.family_id]);
+  const allowedSectors = Array.from(new Set(sectorsLive ?? [])).sort();
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -122,11 +167,18 @@ export default function AIChat({
         }
       } else {
         // Plain chat — system prompt + (optional) Wikipedia context block
-        const sysContent = (systemPrompt
+        const baseSys = systemPrompt
           ? systemPrompt
           : `You are AidFlow Pro's humanitarian field assistant powered by Gemma 4. Respond in ${
               language === 'ar' ? 'Arabic' : language === 'fr' ? 'French' : language === 'es' ? 'Spanish' : 'English'
-            }. Be concise and practical.`) + wikiBlock + wikiInstruction;
+            }. Be concise and practical.`;
+        // If this chat is family-scoped, append the action protocol so the
+        // AI knows it can propose edits via fenced aidflow-action blocks. We
+        // pass the live list of sectors so Gemma can't invent new ones.
+        const actionBlock = family
+          ? buildFamilyActionPrompt({ allowedSectors })
+          : '';
+        const sysContent = baseSys + actionBlock + wikiBlock + wikiInstruction;
 
         const sys: ChatMessage = { role: 'system', content: sysContent };
         const conversation = [sys, ...next];
@@ -198,7 +250,34 @@ export default function AIChat({
           </div>
         )}
         {messages.map((m, i) => (
-          <Bubble key={i} m={m} />
+          <Bubble
+            key={i}
+            m={m}
+            family={family}
+            actionStatus={actionStatus}
+            actionErrors={actionErrors}
+            onApply={async (key, action) => {
+              if (!family) return;
+              setActionStatus((s) => ({ ...s, [key]: 'pending' }));
+              try {
+                await applyFamilyAction(family.family_id, action);
+                setActionStatus((s) => ({ ...s, [key]: 'applied' }));
+                setActionErrors((s) => {
+                  const c = { ...s };
+                  delete c[key];
+                  return c;
+                });
+              } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                setActionStatus((s) => ({ ...s, [key]: 'failed' }));
+                setActionErrors((s) => ({ ...s, [key]: msg }));
+              }
+            }}
+            onDiscard={(key) =>
+              setActionStatus((s) => ({ ...s, [key]: 'discarded' }))
+            }
+            messageIdx={i}
+          />
         ))}
         {thinking && (
           <div className="flex items-center gap-2 text-slate-400 text-sm">
@@ -267,8 +346,29 @@ export default function AIChat({
   );
 }
 
-function Bubble({ m }: { m: ChatMessage }) {
+function Bubble({
+  m,
+  family,
+  actionStatus,
+  actionErrors,
+  onApply,
+  onDiscard,
+  messageIdx,
+}: {
+  m: ChatMessage;
+  family?: Family;
+  actionStatus: Record<string, 'pending' | 'applied' | 'discarded' | 'failed'>;
+  actionErrors: Record<string, string>;
+  onApply: (key: string, action: FamilyAction) => Promise<void>;
+  onDiscard: (key: string) => void;
+  messageIdx: number;
+}) {
   const isUser = m.role === 'user';
+  const actions: FamilyAction[] =
+    !isUser && family && m.content ? parseFamilyActions(m.content) : [];
+  const visibleContent =
+    !isUser && family && actions.length > 0 ? stripFamilyActions(m.content) : m.content;
+
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
@@ -287,7 +387,7 @@ function Bubble({ m }: { m: ChatMessage }) {
           <div className="whitespace-pre-wrap break-words">{m.content || '…'}</div>
         ) : (
           <div className="prose-ai break-words">
-            {m.content ? (
+            {visibleContent ? (
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -301,11 +401,34 @@ function Bubble({ m }: { m: ChatMessage }) {
                   ),
                 }}
               >
-                {m.content}
+                {visibleContent}
               </ReactMarkdown>
+            ) : actions.length > 0 ? (
+              <span className="italic text-slate-400">
+                Proposed change{actions.length === 1 ? '' : 's'} below.
+              </span>
             ) : (
               '…'
             )}
+          </div>
+        )}
+        {!isUser && actions.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-slate-700 space-y-2">
+            {actions.map((action, idx) => {
+              const key = `${messageIdx}:${idx}`;
+              const status = actionStatus[key] ?? 'pending';
+              const err = actionErrors[key];
+              return (
+                <ActionCard
+                  key={key}
+                  action={action}
+                  status={status}
+                  error={err}
+                  onApply={() => onApply(key, action)}
+                  onDiscard={() => onDiscard(key)}
+                />
+              );
+            })}
           </div>
         )}
         {m.citations && m.citations.length > 0 && (
@@ -333,6 +456,82 @@ function Bubble({ m }: { m: ChatMessage }) {
             )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function ActionCard({
+  action,
+  status,
+  error,
+  onApply,
+  onDiscard,
+}: {
+  action: FamilyAction;
+  status: 'pending' | 'applied' | 'discarded' | 'failed';
+  error?: string;
+  onApply: () => void | Promise<void>;
+  onDiscard: () => void;
+}) {
+  const description = describeFamilyAction(action);
+
+  if (status === 'applied') {
+    return (
+      <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-priority-normal/10 border border-priority-normal/30 text-priority-normal">
+        <CheckCircle2 size={13} />
+        <span>Applied: {description}</span>
+      </div>
+    );
+  }
+  if (status === 'discarded') {
+    return (
+      <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-surface-deep border border-slate-700 text-slate-400">
+        <XIcon size={13} />
+        <span className="line-through">{description}</span>
+        <span className="ms-auto italic">discarded</span>
+      </div>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <div className="text-xs px-3 py-2 rounded-lg bg-priority-critical/10 border border-priority-critical/30 text-priority-critical flex items-start gap-2">
+        <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold">Could not apply</div>
+          <div className="opacity-80">{description}</div>
+          {error && <div className="opacity-70 italic mt-0.5">{error}</div>}
+        </div>
+        <button
+          onClick={() => void onApply()}
+          className="text-[11px] underline hover:no-underline ms-auto"
+        >
+          retry
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="text-xs px-3 py-2 rounded-lg bg-brand/10 border border-brand/30">
+      <div className="text-slate-200 font-medium mb-1.5 flex items-center gap-1.5">
+        <Sparkles size={12} className="text-ai" />
+        Proposed change
+      </div>
+      <div className="text-slate-100 mb-2">{description}</div>
+      <div className="flex gap-2">
+        <button
+          onClick={() => void onApply()}
+          className="touch-target px-3 py-1.5 bg-brand hover:bg-brand-dark text-white rounded-md text-xs font-semibold flex items-center gap-1"
+        >
+          <CheckCircle2 size={12} /> Apply
+        </button>
+        <button
+          onClick={onDiscard}
+          className="touch-target px-3 py-1.5 bg-surface-deep hover:bg-slate-700 text-slate-300 rounded-md text-xs flex items-center gap-1"
+        >
+          <XIcon size={12} /> Discard
+        </button>
       </div>
     </div>
   );

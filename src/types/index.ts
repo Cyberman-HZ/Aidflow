@@ -19,28 +19,29 @@ export interface Family {
   children_under_5: number;
   elderly_count: number;
   has_pregnant_member: boolean;
-  medical_conditions: string[]; // e.g. ['diabetes (chronic)', 'malnutrition (critical)']
+  medical_conditions: string[];
   displacement_status: DisplacementStatus;
   income_level: IncomeLevel;
   location_sector: string;
   coordinates?: { lat: number; lng: number };
-  last_updated: string; // ISO timestamp
+  last_updated: string;
   notes: string;
-  // Cached AI output
+  /** Street address — house number, street name. Optional. */
+  street?: string;
+  /** City / town / village name. Optional. */
+  city?: string;
   priority_score?: number;
   priority_level?: PriorityLevel;
   ai_reason?: string;
   recommended_items?: string[];
   last_aid_at?: string;
   new_need_flagged?: boolean;
+  /** Free-text medical notes captured by the field worker on the last delivery. */
+  last_medical_notes?: string;
+  /** Free-text general notes captured by the field worker on the last delivery. */
+  last_delivery_notes?: string;
 }
 
-// Lifecycle of an aid distribution order
-//   pending          → created, not yet dispatched to a team
-//   out_for_delivery → assigned + dispatched, team is en route
-//   delivered        → confirmed delivered to the family (terminal)
-//   failed           → attempted but couldn't deliver (family not home, etc.) (terminal)
-//   cancelled        → cancelled before completion (terminal)
 export type DistributionStatus =
   | 'pending'
   | 'out_for_delivery'
@@ -50,36 +51,31 @@ export type DistributionStatus =
 
 export interface AidDistribution {
   distribution_id: string;
-  /** Short, human-friendly sequential number (e.g. 1, 2, 3 …). Display as ORD-001 etc. */
+  /** Short, human-friendly sequential number. Display as ORD-001 etc. */
   order_number?: number;
   family_id: string;
   session_id: string;
   status: DistributionStatus;
   items_distributed: { item_name: string; quantity: number; category: string }[];
 
-  // Lifecycle timestamps
-  created_at: string;                // when the order was created
-  created_by: string;                // user_id of creator (admin / supervisor / data manager)
-  scheduled_for?: string;            // optional planned delivery datetime (ISO)
-  dispatched_at?: string;            // set when status moved to out_for_delivery
-  delivered_at?: string;             // set when status moved to delivered (the legacy "distributed_at")
-  closed_at?: string;                // set on failed / cancelled
+  created_at: string;
+  created_by: string;
+  scheduled_for?: string;
+  dispatched_at?: string;
+  delivered_at?: string;
+  closed_at?: string;
 
-  // People
-  assigned_to?: string;              // user_id of the field worker / team responsible
-  delivered_by?: string;             // user_id who actually confirmed delivery
+  assigned_to?: string;
+  delivered_by?: string;
 
-  // AI inputs at creation time
   ai_priority_score: number;
   ai_reasoning: string;
 
-  // Notes
-  notes?: string;                    // pre-delivery notes from creator
-  post_update_notes?: string;        // post-delivery field notes
-  failure_reason?: string;           // populated when status === 'failed' or 'cancelled'
-  new_needs_flagged?: boolean;       // field worker flagged new urgent needs
+  notes?: string;
+  post_update_notes?: string;
+  failure_reason?: string;
+  new_needs_flagged?: boolean;
 
-  // -------- Legacy fields kept for backward compatibility with v1 rows ----
   /** @deprecated Use `delivered_by` (post-delivery) or `assigned_to` (pre-delivery) */
   distributed_by?: string;
   /** @deprecated Use `delivered_at` (post-delivery) or `created_at` (pre-delivery) */
@@ -93,9 +89,7 @@ export interface KnowledgeDocument {
   uploaded_at: string;
   uploaded_by: string;
   page_count: number;
-  // Raw extracted text per page
   pages: { page: number; text: string }[];
-  // Optional pre-computed embeddings (one per chunk)
   chunks: KnowledgeChunk[];
   source_filename: string;
   file_size: number;
@@ -107,7 +101,7 @@ export interface KnowledgeChunk {
   page_start: number;
   page_end: number;
   text: string;
-  embedding?: number[]; // 768-dim from nomic-embed-text
+  embedding?: number[];
 }
 
 export interface KidsContent {
@@ -116,7 +110,7 @@ export interface KidsContent {
   age_group: '0-5' | '6-10' | '11-15';
   language: 'en' | 'ar' | 'fr' | 'es';
   type: 'image' | 'video' | 'pdf' | 'story';
-  data_url: string; // base64 for offline use
+  data_url: string;
   mime: string;
   uploaded_at: string;
 }
@@ -127,7 +121,7 @@ export interface AidGuide {
   category: string;
   language: 'en' | 'ar' | 'fr' | 'es';
   content_type: 'pdf' | 'video' | 'text';
-  body: string; // text content OR data url for pdfs / video URL
+  body: string;
   uploaded_at: string;
 }
 
@@ -135,37 +129,27 @@ export interface StarlinkProvider {
   id: string;
   name: string;
   country: string;
-  region: string; // city / town / state — first non-empty admin level
+  region: string;
   type: 'reseller' | 'installer' | 'service_point' | 'official';
   lat: number;
   lng: number;
   phone?: string;
   hours?: string;
   notes?: string;
-  /** "strong" | "moderate" | "weak" — descriptive only; OSM doesn't supply this */
   signal: 'strong' | 'moderate' | 'weak';
-  /** Set on user-added pins (preserved across syncs). */
   custom?: boolean;
-  /** Where this entry came from. 'osm' rows are wiped/refreshed on each sync. */
   source: 'osm' | 'custom';
-  /** OSM-only metadata, used to deduplicate and link back to the source */
   osm_id?: number;
   osm_type?: 'node' | 'way' | 'relation';
   source_url?: string;
-  /** ISO timestamp when this entry was last refreshed from OSM */
   last_synced_at?: string;
-  /** True when the OSM tags clearly identify this as a Starlink-related place */
   is_starlink_match?: boolean;
-  // -------- Address breakdown (fed by OSM tags + Nominatim reverse geocode) --------
   street?: string;
   housenumber?: string;
   postcode?: string;
   suburb?: string;
-  /** ISO 3166-1 alpha-2 country code (e.g. "US", "DE") */
   country_code?: string;
-  /** Pre-formatted full address string for one-line display */
   formatted_address?: string;
-  /** True when address came from Nominatim reverse-geocoding (vs raw OSM tags) */
   address_resolved?: boolean;
 }
 
@@ -173,13 +157,10 @@ export interface User {
   user_id: string;
   name: string;
   role: UserRole;
-  pin: string; // demo only — real impl uses bcrypt + JWT per the PDF
+  pin: string;
   language: 'en' | 'ar' | 'fr' | 'es';
 }
 
-// Field workers / drivers / supervisors / etc. who deliver aid in the field.
-// Workers do NOT need to log in — they are referenced by distribution orders
-// (AidDistribution.assigned_to / delivered_by) and managed via the /workers page.
 export type WorkerPosition =
   | 'Field Worker'
   | 'Supervisor'
@@ -192,7 +173,6 @@ export type WorkerPosition =
   | 'Other';
 
 export interface Worker {
-  /** Internal id (auto-generated, e.g. "W-1", "W-2"). Hidden from the user. */
   id: string;
   first_name: string;
   last_name: string;
@@ -200,17 +180,9 @@ export interface Worker {
   phone?: string;
   notes?: string;
   created_at: string;
-  /** Optional link back to a User row if this worker also has login credentials. */
   user_id?: string;
 }
 
-// Bitchat message lifecycle:
-//   queued    — created locally, not yet attempted
-//   sending   — currently being written to BLE peer / Nostr relay
-//   sent      — handed off to transport (no end-to-end ack yet)
-//   delivered — recipient acknowledged receipt (per Bitchat deliveryAck)
-//   failed    — transport rejected the message (writeValue error, peer drop, etc.)
-//   expired   — TTL hit zero before delivery
 export type BitchatMessageStatus =
   | 'queued'
   | 'sending'
@@ -223,51 +195,36 @@ export interface BitchatMessage {
   msg_id: string;
   channel: string;
   author: string;
-  /** 64-bit sender_id from the Bitchat packet header, hex-encoded */
   author_id?: string;
   body: string;
   sent_at: string;
   status: BitchatMessageStatus;
-  /** Remaining hops at the time of last update (per Bitchat 8-bit TTL). */
   ttl?: number;
-  /** Which transport actually carried the bytes. 'local' = saved locally only. */
   delivered_via: 'bluetooth' | 'nostr' | 'queued' | 'local';
   failure_reason?: string;
-  /** ISO timestamp of last delivery attempt */
   last_attempt_at?: string;
-  /** Number of attempts so far */
   attempts?: number;
-  /** Optional Ed25519 signature, base64-encoded (per Bitchat optional sig field) */
   signature?: string;
-  /** Recipient sender_id; absent ⇒ broadcast (Bitchat treats 0xFF…FF as broadcast). */
   recipient_id?: string;
 }
 
 export type ConnectivityState = 'online' | 'local' | 'disconnected';
 
-// An APK / IPA file (or a download manifest) cached in IndexedDB so field
-// teams can install Bitchat or other companion apps offline. Uploaded once by
-// an org admin; downloadable by anyone connected to the same AidFlow instance.
 export interface BitchatApk {
-  id: string;                  // 'bitchat-android' | 'bitchat-ios-manifest' | etc.
+  id: string;
   app: 'bitchat-android' | 'bitchat-ios';
   filename: string;
-  version: string;             // semver string from the release tag
+  version: string;
   size_bytes: number;
-  mime: string;                // 'application/vnd.android.package-archive' for APKs
-  uploaded_at: string;         // ISO timestamp
-  uploaded_by: string;         // user_id
+  mime: string;
+  uploaded_at: string;
+  uploaded_by: string;
   notes?: string;
-  // The actual file bytes. Dexie supports storing Blob directly via structured clone.
   data: Blob;
-  // Optional release info captured at upload time
   release_url?: string;
   release_notes?: string;
 }
 
-// Continents used to group authorized resellers in the UI.
-// Matches the categorization on the official Starlink retailers article:
-// https://starlink.com/support/article/8a90222d-7c32-edd7-51f6-f696ece07105
 export type Continent =
   | 'Africa'
   | 'Asia-Pacific'
@@ -280,31 +237,24 @@ export type Continent =
 export interface StarlinkReseller {
   id: string;
   name: string;
-  /** "carrier" = mobile network operator (Direct-to-Cell partner), "integrator" = enterprise systems integrator, "reseller" = consumer authorized retailer */
   type: 'carrier' | 'integrator' | 'reseller' | 'distributor';
   continent: Continent;
   country: string;
-  /** Country / region / state-level location of the office or retail presence */
   region?: string;
   address?: string;
   website?: string;
   phone?: string;
   notes?: string;
-  /** URL the editor used to verify this entry — public sources only */
   verified_source?: string;
 }
 
 export interface ResellersDataset {
-  /** Schema version of the JSON file format */
   version: number;
-  /** ISO date the JSON was last edited */
   updated_at: string;
-  /** Description / how-to-edit text shown in the UI */
   source_note?: string;
   resellers: StarlinkReseller[];
 }
 
-// Gemma 4 prioritization output (PDF Appendix D)
 export interface PrioritizationResult {
   family_id: string;
   priority_score: number;

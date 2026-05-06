@@ -1,6 +1,19 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, MapPin, Heart, Users, Baby, Sparkles, Calendar, CheckCircle2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  MapPin,
+  Heart,
+  Users,
+  Baby,
+  Sparkles,
+  Calendar,
+  CheckCircle2,
+  Edit2,
+  X,
+  Package,
+} from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
 import { computeRuleScore } from '@/services/priorityRules';
@@ -9,14 +22,14 @@ import PriorityBadge from '@/components/PriorityBadge';
 import StatusBadge from '@/components/StatusBadge';
 import EmptyState from '@/components/EmptyState';
 import AIChat from '@/components/AIChat';
+import FamilyEditModal from '@/components/FamilyEditModal';
 import type { Family, AidDistribution } from '@/types';
 
 export default function FamilyDetail() {
   const { id } = useParams();
   const { t } = useTranslation();
+  const [editing, setEditing] = useState(false);
 
-  // Live queries — auto-refresh whenever the underlying tables change
-  // (e.g. after a delivery confirmed in the Distribute tab).
   const family = useLiveQuery(
     () => (id ? db.families.get(id) : undefined),
     [id]
@@ -51,10 +64,13 @@ export default function FamilyDetail() {
     );
   }
 
-  const rule = computeRuleScore(family);
-  const score = family.priority_score ?? rule.priority_score;
-  const level = family.priority_level ?? rule.priority_level;
-  const reason = family.ai_reason ?? rule.reason;
+  // Recompute live so the badge reflects the freshest signals (delivery
+  // history, items list, etc.) without waiting for the cached fields on the
+  // family row to be re-saved. We still fall back to the cache when the
+  // recomputed value matches; this is a pure function so it's cheap.
+  const rule = computeRuleScore(family, history);
+  const score = rule.priority_score;
+  const level = rule.priority_level;
   const recommended = family.recommended_items ?? rule.recommended_items;
 
   return (
@@ -74,7 +90,15 @@ export default function FamilyDetail() {
             <LastAidIndicator lastAidAt={family.last_aid_at} />
           </div>
         </div>
-        <PriorityBadge level={level} score={score} size="lg" />
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setEditing(true)}
+            className="touch-target px-3 py-2 bg-surface-light hover:bg-brand hover:text-white border border-slate-700 hover:border-brand rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
+          >
+            <Edit2 size={14} /> {t('family_detail.edit')}
+          </button>
+          <PriorityBadge level={level} score={score} size="lg" />
+        </div>
       </header>
 
       <div className="grid lg:grid-cols-3 gap-5">
@@ -88,6 +112,12 @@ export default function FamilyDetail() {
             )}
             <Row label={t('family_detail.displacement')} value={family.displacement_status} />
             <Row label={t('family_detail.income')} value={family.income_level} />
+            {family.street && (
+              <Row icon={<MapPin size={14} />} label={t('families_edit.street')} value={family.street} />
+            )}
+            {family.city && (
+              <Row icon={<MapPin size={14} />} label={t('families_edit.city')} value={family.city} />
+            )}
           </dl>
         </Card>
 
@@ -110,6 +140,22 @@ export default function FamilyDetail() {
               ))}
             </ul>
           )}
+          {family.last_medical_notes && (
+            <div className="mt-4 pt-4 border-t border-slate-700">
+              <div className="text-xs text-slate-400 mb-1 font-medium flex items-center gap-1">
+                <Heart size={11} /> Last medical notes (from latest delivery)
+              </div>
+              <p className="text-sm text-slate-200 italic">{family.last_medical_notes}</p>
+            </div>
+          )}
+          {family.last_delivery_notes && (
+            <div className="mt-4 pt-4 border-t border-slate-700">
+              <div className="text-xs text-slate-400 mb-1 font-medium">
+                Last delivery notes
+              </div>
+              <p className="text-sm text-slate-200 italic">{family.last_delivery_notes}</p>
+            </div>
+          )}
           {family.notes && (
             <div className="mt-4 pt-4 border-t border-slate-700">
               <div className="text-xs text-slate-400 mb-1 font-medium">Field notes</div>
@@ -119,24 +165,7 @@ export default function FamilyDetail() {
         </Card>
       </div>
 
-      <Card title={
-        <div className="flex items-center gap-2">
-          <Sparkles size={14} className="text-ai" />
-          {t('family_detail.ai_breakdown')}
-        </div>
-      }>
-        <p className="text-sm text-slate-200 mb-3">{reason}</p>
-        <div className="flex flex-wrap gap-2">
-          {recommended.map((item) => (
-            <span
-              key={item}
-              className="text-xs bg-ai/15 text-ai border border-ai/30 px-2 py-1 rounded-full"
-            >
-              {item}
-            </span>
-          ))}
-        </div>
-      </Card>
+      <CurrentNeedsCard family={family} fallbackItems={recommended} />
 
       <div className="grid lg:grid-cols-2 gap-5 lg:items-stretch">
         <Card title={t('family_detail.history')}>
@@ -192,18 +221,178 @@ export default function FamilyDetail() {
             {t('family_detail.ask_about')}
           </h3>
           <AIChat
-            systemPrompt={`You are AidFlow Pro's AI assistant powered by Gemma 4. You are answering questions about family ${family.family_id} (${family.head_name}). Family data: ${JSON.stringify(
-              {
-                ...family,
-                last_aid_at: family.last_aid_at,
-              }
-            )}. Be concise, practical, and reference the family's specific situation.`}
+            systemPrompt={`You are AidFlow Pro's AI assistant powered by Gemma 4. You are answering questions about family ${family.family_id} (${family.head_name}). Current family data (use it as the source of truth — do NOT invent fields): ${JSON.stringify(family)}. Be concise, practical, and reference the family's specific situation. When the user asks for a change to this family's record, propose it as an action block (see ACTIONS section below) — never claim a change has already happened.`}
             contextLabel={`Family ${family.family_id} — ${family.head_name}`}
             placeholder={t('assistant.placeholder')}
+            family={family}
           />
         </div>
       </div>
+
+      {editing && (
+        <FamilyEditModal
+          existing={family}
+          onClose={() => setEditing(false)}
+        />
+      )}
     </div>
+  );
+}
+
+// Current-needs card with inline edit support. The "items" are stored on
+// family.recommended_items and surface as "Suggested needs" badges in the
+// distribution wizard's step 3, so editing them here changes what the
+// wizard suggests for this family next time.
+function CurrentNeedsCard({
+  family,
+  fallbackItems,
+}: {
+  family: Family;
+  fallbackItems: string[];
+}) {
+  const { t } = useTranslation();
+  // An explicit empty array means "no current needs" (e.g. the worker just
+  // cleared them on delivery) and must be honoured. Only fall back to the
+  // rule-engine suggestions when the family has never had items set.
+  const items =
+    family.recommended_items !== undefined
+      ? family.recommended_items
+      : fallbackItems;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string[]>(items);
+  const [draftInput, setDraftInput] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const startEdit = () => {
+    setDraft(items);
+    setDraftInput('');
+    setEditing(true);
+  };
+
+  const addDraftItem = () => {
+    const v = draftInput.trim();
+    if (!v) return;
+    if (draft.some((x) => x.toLowerCase() === v.toLowerCase())) {
+      setDraftInput('');
+      return;
+    }
+    setDraft((arr) => [...arr, v]);
+    setDraftInput('');
+  };
+  const removeDraftItem = (i: number) =>
+    setDraft((arr) => arr.filter((_, idx) => idx !== i));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await db.families.update(family.family_id, {
+        recommended_items: draft,
+        last_updated: new Date().toISOString(),
+      });
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card
+      title={
+        <div className="flex items-center gap-2">
+          <Package size={14} className="text-brand" />
+          {t('family_detail.current_needs')}
+        </div>
+      }
+      action={
+        editing ? null : (
+          <button
+            onClick={startEdit}
+            className="touch-target px-2.5 py-1 hover:bg-surface-light text-slate-300 hover:text-brand rounded-md text-xs flex items-center gap-1"
+          >
+            <Edit2 size={12} /> {t('family_detail.edit_needs')}
+          </button>
+        )
+      }
+    >
+      {editing ? (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-1.5">
+            {draft.map((it, i) => (
+              <span
+                key={i}
+                className="text-xs bg-brand/15 text-brand border border-brand/30 px-2 py-1 rounded-full flex items-center gap-1"
+              >
+                {it}
+                <button
+                  onClick={() => removeDraftItem(i)}
+                  aria-label={`Remove ${it}`}
+                  className="hover:text-white"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+            {draft.length === 0 && (
+              <span className="text-xs text-slate-500 italic">
+                {t('family_detail.no_needs_yet')}
+              </span>
+            )}
+          </div>
+          <div className="flex gap-1.5">
+            <input
+              value={draftInput}
+              onChange={(e) => setDraftInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  addDraftItem();
+                }
+              }}
+              placeholder={t('family_detail.add_need_placeholder') ?? ''}
+              className="flex-1 bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
+            />
+            <button
+              onClick={addDraftItem}
+              disabled={!draftInput.trim()}
+              className="touch-target px-3 py-2 bg-surface-light hover:bg-slate-600 disabled:opacity-40 rounded-lg text-xs flex items-center gap-1"
+            >
+              + {t('distribute.add_item')}
+            </button>
+          </div>
+          <div className="flex gap-2 pt-1 border-t border-slate-700">
+            <button
+              onClick={() => void save()}
+              disabled={saving}
+              className="touch-target px-4 py-2 bg-brand hover:bg-brand-dark disabled:opacity-50 text-white rounded-lg text-sm font-semibold flex items-center gap-1"
+            >
+              {saving ? t('common.saving') : t('common.save')}
+            </button>
+            <button
+              onClick={() => setEditing(false)}
+              disabled={saving}
+              className="touch-target px-4 py-2 bg-surface-light hover:bg-slate-600 disabled:opacity-50 rounded-lg text-sm flex items-center gap-1"
+            >
+              {t('common.cancel')}
+            </button>
+          </div>
+        </div>
+      ) : items.length === 0 ? (
+        <p className="text-sm text-slate-500 italic">
+          {t('family_detail.no_needs_yet')}
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {items.map((item) => (
+            <span
+              key={item}
+              className="text-xs bg-brand/15 text-brand border border-brand/30 px-2 py-1 rounded-full"
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 

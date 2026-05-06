@@ -1,9 +1,19 @@
 // Deterministic rule-based priority scoring engine.
 // Used (a) as the offline / "Disconnected" fallback when Ollama is unreachable
 // and (b) by the AI prompt as the canonical rubric.
-// Algorithm matches PDF Appendix C exactly.
+// Algorithm extends PDF Appendix C with two extra factors:
+//   * Pending-needs count — each unmet need on the family card adds slightly
+//     to urgency (capped so a long list doesn't dominate).
+//   * Aid delivery history — recent successful deliveries lower the score
+//     (the family has been served), recent failed/cancelled attempts raise
+//     it (their attempt failed, the need is still unmet).
 
-import type { Family, PrioritizationResult, PriorityLevel } from '@/types';
+import type {
+  AidDistribution,
+  Family,
+  PrioritizationResult,
+  PriorityLevel,
+} from '@/types';
 
 function levelFromScore(score: number): PriorityLevel {
   if (score >= 80) return 'CRITICAL';
@@ -30,7 +40,20 @@ function recommend(family: Family): string[] {
   return Array.from(new Set(items)).slice(0, 4);
 }
 
-export function computeRuleScore(family: Family): PrioritizationResult {
+/**
+ * Compute the rule-based priority for a family.
+ *
+ * @param family The family record (priority cache may be stale; we recompute
+ *   from the source-of-truth fields below).
+ * @param distributions Optional list of THIS family's distribution orders.
+ *   When provided, the score factors in recent delivery history. Pass an
+ *   empty array (or omit) when distribution data isn't readily available —
+ *   the score will simply ignore those factors.
+ */
+export function computeRuleScore(
+  family: Family,
+  distributions: AidDistribution[] = []
+): PrioritizationResult {
   let score = 0;
   const reasons: string[] = [];
 
@@ -97,6 +120,49 @@ export function computeRuleScore(family: Family): PrioritizationResult {
     score = Math.round(score * 0.9);
   }
 
+  // ---- Needed-items factor ----------------------------------------------
+  const neededItemsCount = family.recommended_items?.length ?? 0;
+  if (neededItemsCount > 0) {
+    const bump = Math.min(10, neededItemsCount * 2);
+    score += bump;
+    reasons.push(
+      `${neededItemsCount} unmet need${neededItemsCount === 1 ? '' : 's'} listed`
+    );
+  }
+
+  // ---- Distribution history factor --------------------------------------
+  if (distributions.length > 0) {
+    const now = Date.now();
+    const cutoff = now - 30 * 86_400_000;
+
+    const recentDelivered = distributions.filter(
+      (d) =>
+        d.status === 'delivered' &&
+        d.delivered_at &&
+        new Date(d.delivered_at).getTime() >= cutoff
+    ).length;
+    const recentFailed = distributions.filter(
+      (d) =>
+        (d.status === 'failed' || d.status === 'cancelled') &&
+        d.closed_at &&
+        new Date(d.closed_at).getTime() >= cutoff
+    ).length;
+
+    if (recentDelivered > 0) {
+      const credit = Math.min(15, recentDelivered * 5);
+      score -= credit;
+      reasons.push(
+        `${recentDelivered} delivery${recentDelivered === 1 ? '' : 'ies'} in last 30 days`
+      );
+    }
+    if (recentFailed > 0) {
+      score += recentFailed * 5;
+      reasons.push(
+        `${recentFailed} unsuccessful delivery attempt${recentFailed === 1 ? '' : 's'}`
+      );
+    }
+  }
+
   score = Math.max(0, Math.min(100, Math.round(score)));
 
   return {
@@ -112,3 +178,5 @@ export function computeRuleScore(family: Family): PrioritizationResult {
 export function sortByScore(results: PrioritizationResult[]): PrioritizationResult[] {
   return [...results].sort((a, b) => b.priority_score - a.priority_score);
 }
+
+export { levelFromScore };

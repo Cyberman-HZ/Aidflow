@@ -12,6 +12,8 @@ import {
   ArrowUpDown,
   X,
   Package,
+  Edit2,
+  UserPlus,
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
@@ -22,7 +24,8 @@ import PriorityBadge from '@/components/PriorityBadge';
 import { Card } from '@/components/Card';
 import EmptyState from '@/components/EmptyState';
 import Loading from '@/components/Loading';
-import type { Family, PrioritizationResult, PriorityLevel } from '@/types';
+import FamilyEditModal from '@/components/FamilyEditModal';
+import type { AidDistribution, Family, PrioritizationResult, PriorityLevel } from '@/types';
 
 type PriorityFilter = 'ALL' | PriorityLevel;
 type SortKey =
@@ -45,15 +48,30 @@ export default function Families() {
   const [sortKey, setSortKey] = useState<SortKey>('score_desc');
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<PrioritizationResult[]>([]);
+  // Modal state — null means closed; { mode: 'create' } or { mode: 'edit', family }
+  const [modal, setModal] = useState<
+    { mode: 'create' } | { mode: 'edit'; family: Family } | null
+  >(null);
 
   const families = useLiveQuery(() => db.families.toArray(), []) ?? [];
+  // Pulled live so the priority score reflects delivery history (recent
+  // successful deliveries lower the score, failed/cancelled raise it).
+  const distributions = useLiveQuery(() => db.distributions.toArray(), []) ?? [];
 
   // Compute initial scores with the rule engine so the page is useful
   // even before the user clicks "Re-run AI prioritization".
-  const ruleResults = useMemo(
-    () => sortByScore(families.map(computeRuleScore)),
-    [families]
-  );
+  const ruleResults = useMemo(() => {
+    // Group distributions by family_id once for O(1) per-family lookup.
+    const byFamily = new Map<string, AidDistribution[]>();
+    for (const d of distributions) {
+      const arr = byFamily.get(d.family_id);
+      if (arr) arr.push(d);
+      else byFamily.set(d.family_id, [d]);
+    }
+    return sortByScore(
+      families.map((f) => computeRuleScore(f, byFamily.get(f.family_id) ?? []))
+    );
+  }, [families, distributions]);
 
   const effectiveResults = results.length ? results : ruleResults;
   const byId = new Map(effectiveResults.map((r) => [r.family_id, r]));
@@ -123,7 +141,12 @@ export default function Families() {
     try {
       const out = await prioritizeFamilies(filtered, language);
       setResults(out);
-      // Persist scores back to Dexie so they're cached for the session
+      // Persist ONLY the priority_score back to Dexie. Re-running AI
+      // prioritization is a re-scoring action — it must not touch the
+      // priority_level / reasoning / recommended_items / medical_conditions
+      // / any other field. Those are owned by the user (via family edit,
+      // delivery confirmation, or the AI assistant action protocol) and
+      // re-scoring should be free of side effects.
       await db.transaction('rw', db.families, async () => {
         for (const r of out) {
           const f = await db.families.get(r.family_id);
@@ -131,9 +154,6 @@ export default function Families() {
             await db.families.put({
               ...f,
               priority_score: r.priority_score,
-              priority_level: r.priority_level,
-              ai_reason: r.reason,
-              recommended_items: r.recommended_items,
             });
           }
         }
@@ -152,14 +172,23 @@ export default function Families() {
             {filtered.length} / {families.length}
           </p>
         </div>
-        <button
-          onClick={() => void runAI()}
-          disabled={running}
-          className="touch-target px-4 py-2 bg-ai hover:bg-violet-600 disabled:opacity-60 rounded-lg flex items-center gap-2 text-sm font-semibold transition-colors"
-        >
-          {running ? <RefreshCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
-          <span>{t('families.rerun_ai')}</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setModal({ mode: 'create' })}
+            className="touch-target px-4 py-2 bg-brand hover:bg-brand-dark rounded-lg flex items-center gap-2 text-sm font-semibold transition-colors text-white"
+          >
+            <UserPlus size={16} />
+            <span>{t('families_edit.add_family')}</span>
+          </button>
+          <button
+            onClick={() => void runAI()}
+            disabled={running}
+            className="touch-target px-4 py-2 bg-ai hover:bg-violet-600 disabled:opacity-60 rounded-lg flex items-center gap-2 text-sm font-semibold transition-colors"
+          >
+            {running ? <RefreshCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
+            <span>{t('families.rerun_ai')}</span>
+          </button>
+        </div>
       </header>
 
       <Card>
@@ -254,15 +283,37 @@ export default function Families() {
         <div className="space-y-2">
           {filtered.map((f) => {
             const r = byId.get(f.family_id);
-            return <FamilyRow key={f.family_id} family={f} result={r} />;
+            return (
+              <FamilyRow
+                key={f.family_id}
+                family={f}
+                result={r}
+                onEdit={() => setModal({ mode: 'edit', family: f })}
+              />
+            );
           })}
         </div>
+      )}
+
+      {modal && (
+        <FamilyEditModal
+          existing={modal.mode === 'edit' ? modal.family : undefined}
+          onClose={() => setModal(null)}
+        />
       )}
     </div>
   );
 }
 
-function FamilyRow({ family, result }: { family: Family; result?: PrioritizationResult }) {
+function FamilyRow({
+  family,
+  result,
+  onEdit,
+}: {
+  family: Family;
+  result?: PrioritizationResult;
+  onEdit: () => void;
+}) {
   const { t } = useTranslation();
   const score = result?.priority_score ?? 0;
   const level = result?.priority_level ?? 'NORMAL';
@@ -272,17 +323,21 @@ function FamilyRow({ family, result }: { family: Family; result?: Prioritization
 
   // Prefer AI-cached recommended items if present; otherwise rule-engine output.
   const items =
-    family.recommended_items && family.recommended_items.length > 0
+    // Treat the family record as the source of truth: an explicit empty
+    // array means "no current needs" (e.g. just cleared via mark-delivered)
+    // and must NOT be overwritten by the rule engine's default suggestions.
+    // Only fall back to the rule engine when the field was never set.
+    family.recommended_items !== undefined
       ? family.recommended_items
       : result?.recommended_items ?? [];
 
   return (
-    <Link
-      to={`/families/${family.family_id}`}
-      className="block bg-surface hover:bg-surface-light border border-slate-700 hover:border-brand/40 rounded-xl px-4 py-3 transition-colors"
-    >
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
+    <div className="group relative bg-surface hover:bg-surface-light border border-slate-700 hover:border-brand/40 rounded-xl transition-colors">
+      <Link
+        to={`/families/${family.family_id}`}
+        className="block px-4 py-3 focus:outline-none"
+      >
+        <div className="min-w-0 pe-10">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold truncate">{family.head_name}</span>
             <span className="text-xs text-slate-500">{family.family_id}</span>
@@ -311,9 +366,6 @@ function FamilyRow({ family, result }: { family: Family; result?: Prioritization
               {days === null ? t('families.never') : t('families.days_ago', { n: days })}
             </span>
           </div>
-          {result?.reason && (
-            <p className="text-xs text-ai mt-1.5 italic line-clamp-2">{result.reason}</p>
-          )}
           {items.length > 0 && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1">
@@ -330,22 +382,25 @@ function FamilyRow({ family, result }: { family: Family; result?: Prioritization
               {items.length > 6 && (
                 <span className="text-[11px] text-slate-500">+{items.length - 6} more</span>
               )}
-            </div>
+              </div>
           )}
         </div>
-        <div className="text-2xl font-bold tabular-nums" style={{ color: colorForLevel(level) }}>
-          {score}
-        </div>
-      </div>
-    </Link>
-  );
-}
+      </Link>
 
-function colorForLevel(level: string) {
-  switch (level) {
-    case 'CRITICAL': return '#ef4444';
-    case 'HIGH': return '#f97316';
-    case 'MEDIUM': return '#eab308';
-    default: return '#22c55e';
-  }
+      {/* Edit pencil — top-right ghost button, always visible. */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          onEdit();
+        }}
+        aria-label={t('families_edit.edit_family', { name: family.head_name })}
+        title={t('families_edit.edit_title')}
+        className="absolute top-3 end-3 z-10 p-1.5 rounded-md text-slate-400 hover:text-brand hover:bg-brand/10 transition-colors"
+      >
+        <Edit2 size={14} />
+      </button>
+    </div>
+  );
 }

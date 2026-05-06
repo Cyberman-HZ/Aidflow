@@ -372,13 +372,23 @@ function OrderCard({
   const [busy, setBusy] = useState(false);
   // Mutually-exclusive inline edit form. null = no form open.
   const [editing, setEditing] = useState<'reassign' | 'schedule' | 'edit' | null>(null);
+  // Delivery-confirmation modal. Replaces the old browser prompt() flow.
+  const [deliveryOpen, setDeliveryOpen] = useState(false);
+  // Reason modal for marking an order failed or cancelled (replaces the
+  // native window.prompt). null = closed; otherwise tracks which transition
+  // is being collected.
+  const [reasonModal, setReasonModal] = useState<'failed' | 'cancelled' | null>(null);
 
   const totalQty = order.items_distributed.reduce((a, b) => a + b.quantity, 0);
   const allowed = ALLOWED_TRANSITIONS[order.status];
   const isPending = order.status === 'pending';
   const isOutForDelivery = order.status === 'out_for_delivery';
 
-  const transition = async (next: DistributionStatus) => {
+  const transition = async (
+    next: DistributionStatus,
+    deliveryData?: DeliveryConfirmData,
+    failureReason?: string
+  ) => {
     if (busy || !currentUser) return;
     setBusy(true);
     try {
@@ -397,24 +407,19 @@ function OrderCard({
         // their own deliveries still get attributed correctly).
         const linkedWorker = await db.workers.where('user_id').equals(currentUser.user_id).first();
         patch.delivered_by = order.assigned_to ?? linkedWorker?.id;
-        const note = prompt(t('distribute.deliver_notes_prompt') ?? 'Post-delivery notes (optional):');
-        if (note) patch.post_update_notes = note;
-        const flagNew = confirm(t('distribute.flag_new_need_prompt') ?? 'Flag a new urgent need at this family?');
-        if (flagNew) patch.new_needs_flagged = true;
+        if (deliveryData?.generalNotes) patch.post_update_notes = deliveryData.generalNotes;
+        if (deliveryData?.flagNewNeed) patch.new_needs_flagged = true;
       }
 
       if (next === 'failed' || next === 'cancelled') {
         patch.closed_at = now;
-        const reason = prompt(
-          next === 'failed'
-            ? t('distribute.fail_reason_prompt') ?? 'Reason for failed delivery:'
-            : t('distribute.cancel_reason_prompt') ?? 'Reason for cancelling:'
-        );
-        if (!reason) {
+        // Reason comes from the FailReasonModal (no more browser prompt).
+        // The caller is responsible for ensuring it's non-empty.
+        if (!failureReason || !failureReason.trim()) {
           setBusy(false);
           return;
         }
-        patch.failure_reason = reason;
+        patch.failure_reason = failureReason.trim();
       }
 
       await db.distributions.update(order.distribution_id, patch);
@@ -422,18 +427,42 @@ function OrderCard({
       // Recompute family priority only on actual delivery
       if (next === 'delivered' && family) {
         const oldScore = family.priority_score ?? computeRuleScore(family).priority_score;
+        // Build the post-delivery family snapshot. The field worker's
+        // "next distribution items" become the new recommended_items so the
+        // wizard surfaces them next time. Medical & general notes are stored
+        // for future reference and to feed the AI assistant.
+        //
+        // Important: if the worker EMPTIED the next-items list, persist that
+        // (write []) so the family card no longer shows stale chips. Only
+        // skip the write when deliveryData itself is missing (no modal
+        // interaction at all — shouldn't happen in normal flow).
         const updatedFamily: Family = {
           ...family,
           last_aid_at: now,
           new_need_flagged: !!patch.new_needs_flagged,
           last_updated: now,
+          ...(deliveryData
+            ? {
+                recommended_items: (deliveryData.nextItems ?? [])
+                  .map((i) => i.item_name.trim())
+                  .filter((s) => s.length > 0),
+              }
+            : {}),
+          ...(deliveryData?.medicalNotes
+            ? { last_medical_notes: deliveryData.medicalNotes }
+            : {}),
+          ...(deliveryData?.generalNotes
+            ? { last_delivery_notes: deliveryData.generalNotes }
+            : {}),
         };
         const recompute = await recomputeAfterUpdate(
           updatedFamily,
           oldScore,
           `Items delivered: ${order.items_distributed
             .map((i) => `${i.item_name} ×${i.quantity}`)
-            .join(', ')}. Notes: ${patch.post_update_notes || '—'}.`,
+            .join(', ')}. Notes: ${patch.post_update_notes || '—'}.${
+            deliveryData?.medicalNotes ? ` Medical: ${deliveryData.medicalNotes}.` : ''
+          }`,
           language
         );
         await db.families.put({
@@ -606,8 +635,13 @@ function OrderCard({
           {allowed.includes('out_for_delivery') && (
             <button
               onClick={() => void transition('out_for_delivery')}
-              disabled={busy}
-              className="touch-target px-3 py-1.5 bg-priority-medium/15 hover:bg-priority-medium/25 text-priority-medium border border-priority-medium/30 rounded-lg text-xs font-semibold flex items-center gap-1"
+              disabled={busy || !order.assigned_to}
+              title={
+                !order.assigned_to
+                  ? (t('distribute.dispatch_needs_worker') ?? '')
+                  : undefined
+              }
+              className="touch-target px-3 py-1.5 bg-priority-medium/15 hover:bg-priority-medium/25 text-priority-medium border border-priority-medium/30 rounded-lg text-xs font-semibold flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Truck size={12} />{' '}
               {order.status === 'failed' ? t('distribute.action.retry') : t('distribute.action.dispatch')}
@@ -615,7 +649,7 @@ function OrderCard({
           )}
           {allowed.includes('delivered') && (
             <button
-              onClick={() => void transition('delivered')}
+              onClick={() => setDeliveryOpen(true)}
               disabled={busy}
               className="touch-target px-3 py-1.5 bg-priority-normal/15 hover:bg-priority-normal/25 text-priority-normal border border-priority-normal/30 rounded-lg text-xs font-semibold flex items-center gap-1"
             >
@@ -624,7 +658,7 @@ function OrderCard({
           )}
           {allowed.includes('failed') && (
             <button
-              onClick={() => void transition('failed')}
+              onClick={() => setReasonModal('failed')}
               disabled={busy}
               className="touch-target px-3 py-1.5 bg-priority-critical/10 hover:bg-priority-critical/20 text-priority-critical border border-priority-critical/30 rounded-lg text-xs font-semibold flex items-center gap-1"
             >
@@ -633,7 +667,7 @@ function OrderCard({
           )}
           {allowed.includes('cancelled') && (
             <button
-              onClick={() => void transition('cancelled')}
+              onClick={() => setReasonModal('cancelled')}
               disabled={busy}
               className="touch-target px-3 py-1.5 bg-surface-light hover:bg-slate-600 text-slate-300 rounded-lg text-xs flex items-center gap-1"
             >
@@ -716,6 +750,32 @@ function OrderCard({
           </div>
         </div>
       )}
+
+      {deliveryOpen && (
+        <DeliveryConfirmModal
+          family={family}
+          deliveredItems={order.items_distributed}
+          onClose={() => setDeliveryOpen(false)}
+          onConfirm={async (data) => {
+            setDeliveryOpen(false);
+            await transition('delivered', data);
+          }}
+        />
+      )}
+
+      {reasonModal && (
+        <FailReasonModal
+          kind={reasonModal}
+          familyName={family?.head_name}
+          orderLabel={formatOrderNumber(order.order_number)}
+          onClose={() => setReasonModal(null)}
+          onConfirm={async (reason) => {
+            const k = reasonModal;
+            setReasonModal(null);
+            if (k) await transition(k, undefined, reason);
+          }}
+        />
+      )}
     </article>
   );
 }
@@ -764,7 +824,7 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
 
   const sectorFamilies = useMemo(() => {
     const filtered = families.filter((f) => !sector || f.location_sector === sector);
-    const ranked: PrioritizationResult[] = sortByScore(filtered.map(computeRuleScore));
+    const ranked: PrioritizationResult[] = sortByScore(filtered.map((f) => computeRuleScore(f)));
     const byId = new Map(ranked.map((r) => [r.family_id, r]));
     return filtered
       .slice()
@@ -787,6 +847,10 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
 
   const submit = async () => {
     if (!selectedFamily || !user) return;
+    // Hard guard: an order cannot be Out for delivery without an assignee.
+    // The UI already disables the button in this case but we double-check
+    // here to protect against state desync.
+    const willDispatch = dispatchNow && !!assignedTo;
     setSaving(true);
     try {
       const now = new Date().toISOString();
@@ -798,13 +862,13 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
         order_number,
         family_id: selectedFamily.family_id,
         session_id: `S-${now.slice(0, 10)}`,
-        status: dispatchNow ? 'out_for_delivery' : 'pending',
+        status: willDispatch ? 'out_for_delivery' : 'pending',
         items_distributed: items.filter((i) => i.item_name.trim()),
         created_at: now,
         created_by: user.user_id,
         assigned_to: assignedTo || undefined,
         scheduled_for: scheduledFor ? new Date(scheduledFor).toISOString() : undefined,
-        dispatched_at: dispatchNow ? now : undefined,
+        dispatched_at: willDispatch ? now : undefined,
         ai_priority_score: score,
         ai_reasoning: selectedFamily.ai_reason ?? '',
         notes: notes.trim() || undefined,
@@ -1060,16 +1124,28 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
               />
             </div>
 
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
+            {/* "Dispatch immediately" is only valid with an assignee — an
+                order can't be Out for delivery if no one is delivering it. */}
+            <label
+              className={`flex items-center gap-2 text-sm ${
+                assignedTo ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+              }`}
+            >
               <input
                 type="checkbox"
-                checked={dispatchNow}
+                checked={dispatchNow && !!assignedTo}
+                disabled={!assignedTo}
                 onChange={(e) => setDispatchNow(e.target.checked)}
                 className="accent-priority-medium"
               />
               <Truck size={14} className="text-priority-medium" />
               <span>{t('distribute.dispatch_immediately')}</span>
             </label>
+            {!assignedTo && (
+              <p className="text-[11px] text-slate-500 italic mt-1">
+                {t('distribute.dispatch_needs_worker')}
+              </p>
+            )}
           </div>
 
           <div className="flex justify-between mt-5">
@@ -1078,7 +1154,12 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
             </button>
             <button
               onClick={() => void submit()}
-              disabled={saving}
+              disabled={saving || (dispatchNow && !assignedTo)}
+              title={
+                dispatchNow && !assignedTo
+                  ? (t('distribute.dispatch_needs_worker') ?? '')
+                  : undefined
+              }
               className="touch-target px-4 py-2 bg-brand hover:bg-brand-dark disabled:opacity-60 rounded-lg flex items-center gap-2 font-semibold"
             >
               {saving ? <Loading /> : <CheckCircle2 size={16} />}
@@ -1435,6 +1516,416 @@ function EditPanel({
         >
           <X size={12} /> {t('common.cancel')}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// =========================================================================
+// Delivery confirmation modal
+// =========================================================================
+//
+// Shown when the field worker clicks "Mark delivered". Replaces the old
+// browser prompt() / confirm() flow with a structured form so the worker can
+// capture three useful pieces of information in one place:
+//
+//   1. Next distribution items — the family's most pressing needs for the
+//      NEXT visit. Saved to family.recommended_items so the wizard surfaces
+//      them as "Suggested needs" the next time anyone opens an order for
+//      this family.
+//   2. Medical notes — saved to family.last_medical_notes (free text).
+//   3. General notes — saved to distribution.post_update_notes AND mirrored
+//      to family.last_delivery_notes for quick reference.
+//
+// Plus a "Flag a new urgent need" checkbox that marks the order so it's
+// visible on the family card.
+
+export interface DeliveryConfirmData {
+  nextItems: { item_name: string; quantity: number; category: string }[];
+  medicalNotes: string;
+  generalNotes: string;
+  flagNewNeed: boolean;
+}
+
+function DeliveryConfirmModal({
+  family,
+  deliveredItems,
+  onConfirm,
+  onClose,
+}: {
+  family?: Family;
+  deliveredItems: { item_name: string; quantity: number; category: string }[];
+  onConfirm: (data: DeliveryConfirmData) => Promise<void> | void;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  // Pre-populate "next items" with whatever the family currently has cached
+  // as recommended_items (or the most recent items just delivered as a sane
+  // default). The worker can edit / clear / add.
+  const initial: LineItem[] =
+    (family?.recommended_items?.length
+      ? family.recommended_items.map((name) => {
+          const tmpl = ITEM_TEMPLATES.find(
+            (tt) => tt.name.toLowerCase() === name.toLowerCase()
+          );
+          return {
+            item_name: tmpl?.name ?? name,
+            quantity: 1,
+            category: tmpl?.category ?? 'general',
+          };
+        })
+      : deliveredItems.map((i) => ({ ...i }))) ?? [];
+
+  const [items, setItems] = useState<LineItem[]>(initial);
+  const [medicalNotes, setMedicalNotes] = useState(family?.last_medical_notes ?? '');
+  const [generalNotes, setGeneralNotes] = useState('');
+  const [flagNewNeed, setFlagNewNeed] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const updateItem = (i: number, patch: Partial<LineItem>) =>
+    setItems((arr) => arr.map((it, idx) => (idx === i ? { ...it, ...patch } : it)));
+  const addItem = () =>
+    setItems((arr) => [...arr, { item_name: '', quantity: 1, category: 'general' }]);
+  const removeItem = (i: number) => setItems((arr) => arr.filter((_, idx) => idx !== i));
+
+  const handleConfirm = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onConfirm({
+        nextItems: items.filter((i) => i.item_name.trim().length > 0),
+        medicalNotes: medicalNotes.trim(),
+        generalNotes: generalNotes.trim(),
+        flagNewNeed,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delivery-confirm-title"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl bg-surface border border-priority-normal/40 rounded-xl shadow-2xl flex flex-col max-h-[90vh]"
+      >
+        <header className="px-5 py-3 border-b border-slate-700 flex items-start justify-between gap-3">
+          <div>
+            <h2
+              id="delivery-confirm-title"
+              className="text-base font-bold flex items-center gap-2 text-priority-normal"
+            >
+              <CheckCircle2 size={18} /> {t('distribute.delivery_confirm.title')}
+            </h2>
+            {family && (
+              <p className="text-xs text-slate-400 mt-0.5">
+                {family.head_name} · {family.family_id} · {family.location_sector}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="touch-target p-1.5 hover:bg-surface-light rounded-lg text-slate-400 hover:text-white"
+            aria-label={t('common.close')}
+          >
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className="px-5 py-4 space-y-5 overflow-y-auto">
+          {/* Next distribution items */}
+          <section>
+            <label className="block text-sm font-semibold mb-1.5 flex items-center gap-1.5">
+              <Sparkles size={13} className="text-ai" />
+              {t('distribute.delivery_confirm.next_items_title')}
+            </label>
+            <p className="text-xs text-slate-400 mb-2">
+              {t('distribute.delivery_confirm.next_items_hint')}
+            </p>
+            <div className="space-y-1.5">
+              {items.map((it, i) => (
+                <div key={i} className="flex gap-1.5 items-center">
+                  <select
+                    value={it.item_name}
+                    onChange={(e) => {
+                      const tmpl = ITEM_TEMPLATES.find((tt) => tt.name === e.target.value);
+                      updateItem(i, {
+                        item_name: e.target.value,
+                        category: tmpl?.category ?? it.category,
+                      });
+                    }}
+                    className="flex-1 bg-surface-deep border border-slate-700 rounded px-2 py-2 text-sm"
+                  >
+                    <option value="">— {t('distribute.add_item')} —</option>
+                    {ITEM_TEMPLATES.map((tmpl) => (
+                      <option key={tmpl.name} value={tmpl.name}>
+                        {tmpl.name}
+                      </option>
+                    ))}
+                    {it.item_name &&
+                      !ITEM_TEMPLATES.some((tt) => tt.name === it.item_name) && (
+                        <option value={it.item_name}>{it.item_name}</option>
+                      )}
+                  </select>
+                  <input
+                    type="number"
+                    min={1}
+                    value={it.quantity}
+                    onChange={(e) =>
+                      updateItem(i, { quantity: Math.max(1, +e.target.value) })
+                    }
+                    className="w-16 bg-surface-deep border border-slate-700 rounded px-2 py-2 text-sm text-center"
+                    aria-label="Quantity"
+                  />
+                  <button
+                    onClick={() => removeItem(i)}
+                    className="touch-target p-2 hover:bg-red-500/10 hover:text-red-400 rounded"
+                    aria-label="Remove item"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+              <button
+                onClick={addItem}
+                className="text-xs text-brand hover:underline flex items-center gap-1 mt-1"
+              >
+                <Plus size={12} /> {t('distribute.add_item')}
+              </button>
+            </div>
+          </section>
+
+          {/* Medical notes */}
+          <section>
+            <label
+              htmlFor="delivery-medical-notes"
+              className="block text-sm font-semibold mb-1.5 flex items-center gap-1.5"
+            >
+              <AlertTriangle size={13} className="text-priority-critical" />
+              {t('distribute.delivery_confirm.medical_notes_title')}
+            </label>
+            <p className="text-xs text-slate-400 mb-2">
+              {t('distribute.delivery_confirm.medical_notes_hint')}
+            </p>
+            <textarea
+              id="delivery-medical-notes"
+              value={medicalNotes}
+              onChange={(e) => setMedicalNotes(e.target.value)}
+              rows={3}
+              placeholder={
+                t('distribute.delivery_confirm.medical_notes_placeholder') ?? ''
+              }
+              className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
+            />
+          </section>
+
+          {/* General notes */}
+          <section>
+            <label
+              htmlFor="delivery-general-notes"
+              className="block text-sm font-semibold mb-1.5 flex items-center gap-1.5"
+            >
+              <Info size={13} className="text-brand" />
+              {t('distribute.delivery_confirm.general_notes_title')}
+            </label>
+            <p className="text-xs text-slate-400 mb-2">
+              {t('distribute.delivery_confirm.general_notes_hint')}
+            </p>
+            <textarea
+              id="delivery-general-notes"
+              value={generalNotes}
+              onChange={(e) => setGeneralNotes(e.target.value)}
+              rows={3}
+              placeholder={
+                t('distribute.delivery_confirm.general_notes_placeholder') ?? ''
+              }
+              className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
+            />
+          </section>
+
+          {/* New urgent need flag */}
+          <label className="flex items-start gap-2 text-sm cursor-pointer bg-surface-light/50 border border-slate-700 rounded-lg px-3 py-2 hover:border-priority-critical/40 transition-colors">
+            <input
+              type="checkbox"
+              checked={flagNewNeed}
+              onChange={(e) => setFlagNewNeed(e.target.checked)}
+              className="mt-0.5 accent-priority-critical"
+            />
+            <div>
+              <div className="font-medium flex items-center gap-1.5">
+                <Flag size={12} className="text-priority-critical" />
+                {t('distribute.delivery_confirm.flag_new_need_title')}
+              </div>
+              <div className="text-xs text-slate-400 mt-0.5">
+                {t('distribute.delivery_confirm.flag_new_need_hint')}
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <footer className="px-5 py-3 border-t border-slate-700 flex justify-end gap-2 bg-surface-deep/50">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="touch-target px-4 py-2 bg-surface-light hover:bg-slate-600 disabled:opacity-50 rounded-lg text-sm flex items-center gap-1"
+          >
+            <X size={14} /> {t('common.cancel')}
+          </button>
+          <button
+            onClick={() => void handleConfirm()}
+            disabled={saving}
+            className="touch-target px-4 py-2 bg-priority-normal hover:bg-priority-normal/90 disabled:opacity-50 text-white rounded-lg text-sm font-semibold flex items-center gap-1"
+          >
+            {saving ? <Loading /> : <CheckCircle2 size={14} />}{' '}
+            {t('distribute.delivery_confirm.confirm')}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+// =========================================================================
+// Fail / cancel reason modal
+// =========================================================================
+//
+// Replaces the native browser prompt() that used to capture the reason when
+// marking an order failed or cancelled. Same UX as the delivery confirmation
+// modal: a centered overlay with a textarea + Confirm / Cancel buttons.
+//
+// "kind" controls the heading and required-vs-optional copy: a failed
+// delivery requires a reason (we need to know why for follow-up); cancelling
+// also requires a reason since it's a terminal status.
+
+function FailReasonModal({
+  kind,
+  familyName,
+  orderLabel,
+  onConfirm,
+  onClose,
+}: {
+  kind: 'failed' | 'cancelled';
+  familyName?: string;
+  orderLabel: string;
+  onConfirm: (reason: string) => void | Promise<void>;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const isFailed = kind === 'failed';
+
+  const handleConfirm = async () => {
+    if (submitting) return;
+    if (!reason.trim()) return; // button is disabled too — defensive
+    setSubmitting(true);
+    try {
+      await onConfirm(reason.trim());
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="fail-reason-title"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={`w-full max-w-md bg-surface border rounded-xl shadow-2xl flex flex-col ${
+          isFailed ? 'border-priority-critical/40' : 'border-slate-700'
+        }`}
+      >
+        <header className="px-5 py-3 border-b border-slate-700 flex items-start justify-between gap-3">
+          <div>
+            <h2
+              id="fail-reason-title"
+              className={`text-base font-bold flex items-center gap-2 ${
+                isFailed ? 'text-priority-critical' : 'text-slate-200'
+              }`}
+            >
+              {isFailed ? <AlertTriangle size={18} /> : <XCircle size={18} />}
+              {isFailed
+                ? t('distribute.fail_modal_title')
+                : t('distribute.cancel_modal_title')}
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {orderLabel}
+              {familyName ? ` · ${familyName}` : ''}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="touch-target p-1.5 hover:bg-surface-light rounded-lg text-slate-400 hover:text-white"
+            aria-label={t('common.close')}
+          >
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className="px-5 py-4 space-y-2">
+          <label
+            htmlFor="fail-reason-textarea"
+            className="block text-xs text-slate-400 font-medium"
+          >
+            {isFailed
+              ? t('distribute.fail_reason_prompt')
+              : t('distribute.cancel_reason_prompt')}
+            <span className="text-priority-critical"> *</span>
+          </label>
+          <p className="text-[11px] text-slate-500">
+            {isFailed
+              ? t('distribute.fail_modal_hint')
+              : t('distribute.cancel_modal_hint')}
+          </p>
+          <textarea
+            id="fail-reason-textarea"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={4}
+            autoFocus
+            placeholder={
+              isFailed
+                ? (t('distribute.fail_modal_placeholder') ?? '')
+                : (t('distribute.cancel_modal_placeholder') ?? '')
+            }
+            className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
+          />
+        </div>
+
+        <footer className="px-5 py-3 border-t border-slate-700 flex justify-end gap-2 bg-surface-deep/50">
+          <button
+            onClick={onClose}
+            disabled={submitting}
+            className="touch-target px-4 py-2 bg-surface-light hover:bg-slate-600 disabled:opacity-50 rounded-lg text-sm flex items-center gap-1"
+          >
+            <X size={14} /> {t('common.cancel')}
+          </button>
+          <button
+            onClick={() => void handleConfirm()}
+            disabled={submitting || !reason.trim()}
+            className={`touch-target px-4 py-2 disabled:opacity-50 text-white rounded-lg text-sm font-semibold flex items-center gap-1 ${
+              isFailed
+                ? 'bg-priority-critical hover:bg-red-600'
+                : 'bg-slate-600 hover:bg-slate-500'
+            }`}
+          >
+            {submitting ? <Loading /> : isFailed ? <AlertTriangle size={14} /> : <XCircle size={14} />}
+            {isFailed
+              ? t('distribute.action.mark_failed')
+              : t('distribute.fail_modal_confirm_cancel')}
+          </button>
+        </footer>
       </div>
     </div>
   );
@@ -1870,3 +2361,4 @@ function HistoryRow({
     </article>
   );
 }
+

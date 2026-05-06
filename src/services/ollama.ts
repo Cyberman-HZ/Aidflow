@@ -19,6 +19,7 @@ import type {
 } from '@/types';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { computeRuleScore } from './priorityRules';
+import { db } from '@/db/database';
 
 interface ChatResponse {
   message?: { role: string; content: string };
@@ -230,8 +231,17 @@ export async function recomputeAfterUpdate(
   changes: string,
   language: 'en' | 'ar' | 'fr' | 'es' = 'en'
 ): Promise<{ new_score: number; delta: number; reason: string }> {
+  // Pull this family's distributions so the rule fallback can factor in
+  // delivery history (recent successes lower the score, failures raise it).
+  const dists = await db.distributions
+    .where('family_id')
+    .equals(family.family_id)
+    .toArray();
   if (!(await pingOllama())) {
-    const r = computeRuleScore({ ...family, last_aid_at: new Date().toISOString() });
+    const r = computeRuleScore(
+      { ...family, last_aid_at: new Date().toISOString() },
+      dists
+    );
     return { new_score: r.priority_score, delta: r.priority_score - oldScore, reason: r.reason };
   }
   const langName =
@@ -250,7 +260,10 @@ export async function recomputeAfterUpdate(
     const end = cleaned.lastIndexOf('}');
     return JSON.parse(cleaned.slice(start, end + 1));
   } catch {
-    const r = computeRuleScore({ ...family, last_aid_at: new Date().toISOString() });
+    const r = computeRuleScore(
+      { ...family, last_aid_at: new Date().toISOString() },
+      dists
+    );
     return { new_score: r.priority_score, delta: r.priority_score - oldScore, reason: r.reason };
   }
 }

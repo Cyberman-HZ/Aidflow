@@ -41,6 +41,8 @@ import { useConnectivityStore } from '@/stores/connectivityStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { computeRuleScore } from '@/services/priorityRules';
 import { chatStream, pingOllama } from '@/services/ollama';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 const PRIORITY_COLORS = {
   CRITICAL: '#ef4444',
@@ -292,26 +294,29 @@ export default function Dashboard() {
 
   // Deterministic, no-AI fallback. Always works offline.
   const ruleBasedSummary = (payload: ReturnType<typeof buildSummaryPayload>) => {
+    // Pluralize helpers — picks the right form based on count.
+    const plural = (n: number, singular: string, plural: string) => `${n} ${n === 1 ? singular : plural}`;
     const t = payload.totals;
     const lines: string[] = [];
     lines.push(`# Operations brief — ${new Date().toLocaleDateString()}`);
     lines.push('');
     lines.push('## Impact');
     lines.push(
-      `- ${t.deliveries_today} delivery${t.deliveries_today === 1 ? '' : 'ies'} confirmed today (${t.items_delivered_today} item${t.items_delivered_today === 1 ? '' : 's'} total).`
+      `- ${plural(t.deliveries_today, 'delivery', 'deliveries')} confirmed today (${plural(t.items_delivered_today, 'item', 'items')} total).`
     );
     lines.push(
-      `- ${t.delivered_lifetime} lifetime deliveries across ${t.sectors_active} sector${t.sectors_active === 1 ? '' : 's'}; ${t.failed_lifetime} failed.`
+      `- ${t.delivered_lifetime} lifetime deliveries across ${plural(t.sectors_active, 'sector', 'sectors')}; ${t.failed_lifetime} failed.`
     );
-    lines.push(`- ${t.families} families tracked, ${t.workers_total} workers on roster.`);
+    lines.push(`- ${plural(t.families, 'family', 'families')} tracked, ${plural(t.workers_total, 'worker', 'workers')} on roster.`);
     lines.push('');
     lines.push('## Gaps');
+    const gapsBefore = lines.length;
     if (t.critical_priority > 0)
-      lines.push(`- ${t.critical_priority} families currently sit at CRITICAL priority and need attention.`);
+      lines.push(`- ${plural(t.critical_priority, 'family', 'families')} currently at CRITICAL priority — need attention.`);
     if (t.new_needs_flagged > 0)
-      lines.push(`- ${t.new_needs_flagged} family${t.new_needs_flagged === 1 ? '' : 'ies'} flagged with a new urgent need on the last visit.`);
+      lines.push(`- ${plural(t.new_needs_flagged, 'family', 'families')} flagged with a new urgent need on the last visit.`);
     if (t.stuck_24h > 0)
-      lines.push(`- ${t.stuck_24h} order${t.stuck_24h === 1 ? '' : 's'} stuck in out-for-delivery for over 24h — investigate or reassign.`);
+      lines.push(`- ${plural(t.stuck_24h, 'order', 'orders')} stuck in out-for-delivery for over 24h — investigate or reassign.`);
     if (payload.recent_failures_or_cancellations.length > 0) {
       lines.push(
         `- Recent failures/cancellations: ${payload.recent_failures_or_cancellations
@@ -319,7 +324,7 @@ export default function Dashboard() {
           .join('; ')}.`
       );
     }
-    if (lines[lines.length - 1] === '## Gaps') lines.push('- No major operational gaps detected.');
+    if (lines.length === gapsBefore) lines.push('- No major operational gaps detected.');
     lines.push('');
     lines.push('## Top critical families');
     for (const f of payload.top_critical_families) {
@@ -328,13 +333,14 @@ export default function Dashboard() {
     }
     lines.push('');
     lines.push('## Recommended next actions');
-    if (t.pending_orders > 0) lines.push(`- Dispatch the ${t.pending_orders} pending order${t.pending_orders === 1 ? '' : 's'}.`);
-    if (t.stuck_24h > 0) lines.push(`- Reach out on the ${t.stuck_24h} stuck order${t.stuck_24h === 1 ? '' : 's'} — confirm delivery or mark failed.`);
+    const recBefore = lines.length;
+    if (t.pending_orders > 0) lines.push(`- Dispatch the ${plural(t.pending_orders, 'pending order', 'pending orders')}.`);
+    if (t.stuck_24h > 0) lines.push(`- Reach out on the ${plural(t.stuck_24h, 'stuck order', 'stuck orders')} — confirm delivery or mark failed.`);
     if (t.critical_priority > 0)
-      lines.push(`- Prioritise the ${t.critical_priority} CRITICAL famil${t.critical_priority === 1 ? 'y' : 'ies'} listed above for the next distribution session.`);
+      lines.push(`- Prioritise the ${plural(t.critical_priority, 'CRITICAL family', 'CRITICAL families')} listed above for the next distribution session.`);
     if (payload.worker_workload[0]?.active >= 2)
       lines.push(`- Workload is concentrated on ${payload.worker_workload[0].name} (${payload.worker_workload[0].active} active) — consider rebalancing.`);
-    if (lines[lines.length - 1] === '## Recommended next actions') lines.push('- Operations are steady; continue current cadence.');
+    if (lines.length === recBefore) lines.push('- Operations are steady; continue current cadence.');
     return lines.join('\n');
   };
 
@@ -366,47 +372,53 @@ export default function Dashboard() {
         ? 'Spanish'
         : 'English';
 
-    const systemPrompt = [
-      `You are AidFlow Pro's reporting AI, powered by Gemma 4. Always respond in ${langName}.`,
-      ``,
-      `You will receive a JSON snapshot of a humanitarian aid operation. Produce an executive brief for the operations director with these exact sections (use markdown headings):`,
-      ``,
-      `## Impact`,
-      `- 2-3 bullets on what was delivered (today vs lifetime), how many families are tracked, sector coverage.`,
-      ``,
-      `## Gaps & risks`,
-      `- 2-4 bullets on critical families, new-need flags, stuck orders, recent failures. Cite specific family heads / sectors / order numbers from the data.`,
-      ``,
-      `## Top critical cases`,
-      `- For each of the top critical families in the JSON, ONE bullet: family head (family_id, sector) — priority score, days since last aid, why they're critical.`,
-      ``,
-      `## Recommended actions`,
-      `- 3-5 specific, actionable next steps (e.g. "dispatch ORD-014 to F-0042 today", "rebalance Tariq's 3 active orders").`,
-      ``,
-      `Rules:`,
-      `1. Only reference data that appears in the JSON. Never invent IDs, names, sectors, or numbers.`,
-      `2. Be concise. Hard cap: ~250 words total.`,
-      `3. Use bullets. No tables. No code fences.`,
-      `4. If a section has no relevant data, say "Nothing to flag this period."`,
-    ].join('\n');
+    // Compact system prompt — short and direct so the model spends its
+    // tokens on the brief itself, not on parroting back instructions. We
+    // pre-compute a few summary lines so the model doesn't have to re-derive
+    // them, and pass the full JSON only as reference for citations.
+    const t2 = payload.totals;
+    const briefingFacts = [
+      `Today: ${t2.deliveries_today} deliveries, ${t2.items_delivered_today} items.`,
+      `Active: ${t2.pending_orders} pending + ${t2.out_for_delivery_orders} out-for-delivery (${t2.stuck_24h} stuck >24h).`,
+      `Families: ${t2.families} tracked, ${t2.critical_priority} CRITICAL, ${t2.new_needs_flagged} flagged with new urgent need.`,
+      `Lifetime: ${t2.delivered_lifetime} delivered, ${t2.failed_lifetime} failed.`,
+      `Sectors: ${t2.sectors_active}. Workers: ${t2.workers_total}.`,
+    ].join(' ');
+
+    const systemPrompt =
+      `You are AidFlow Pro's reporting AI. Respond in ${langName}. ` +
+      `Write a director-style executive brief in markdown with EXACTLY these four sections, in this order: ` +
+      `## Impact, ## Gaps & risks, ## Top critical cases, ## Recommended actions. ` +
+      `Use 2-5 bullet points per section. Cite real family names, family_ids, sectors, and order numbers from the JSON below. ` +
+      `Never invent data. Keep total length under ~280 words. Plain markdown only — no tables, no code fences, no preamble. ` +
+      `Start your response directly with "## Impact".`;
+
+    const userPrompt =
+      `Snapshot summary: ${briefingFacts}\n\n` +
+      `Full JSON snapshot for citations:\n` +
+      JSON.stringify(payload);
 
     try {
       let acc = '';
       for await (const delta of chatStream(
         [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: JSON.stringify(payload, null, 2) },
+          { role: 'user', content: userPrompt },
         ],
-        { temperature: 0.3, maxTokens: 700 }
+        { temperature: 0.4, maxTokens: 1024 }
       )) {
         acc += delta;
         setSummary(acc);
       }
-      if (!acc.trim()) {
+      // Strip any leading whitespace / preamble before the first markdown
+      // heading so the rendered document always starts cleanly.
+      const cleaned = acc.replace(/^[\s\S]*?(?=## )/, '').trim();
+      if (!cleaned) {
         setSummary(ruleBasedSummary(payload));
         setSummarySource('rules');
         setSummaryError('Gemma 4 returned an empty response — showing a rule-based summary instead.');
       } else {
+        setSummary(cleaned);
         setSummarySource('ai');
       }
     } catch (e) {
@@ -646,7 +658,9 @@ export default function Dashboard() {
           </div>
         )}
         {summary ? (
-          <div className="text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">{summary}</div>
+          <div className="prose-ai text-sm text-slate-200 leading-relaxed break-words">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary}</ReactMarkdown>
+          </div>
         ) : generating ? (
           <p className="text-sm text-slate-500 italic">Asking Gemma 4 to draft the executive brief…</p>
         ) : (
