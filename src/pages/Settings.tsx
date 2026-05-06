@@ -1,12 +1,15 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Cog, AlertTriangle, CheckCircle2, Trash2 } from 'lucide-react';
+import { Cog, AlertTriangle, CheckCircle2, Trash2, Upload, Smartphone, ExternalLink } from 'lucide-react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useConnectivityStore } from '@/stores/connectivityStore';
+import { useAuthStore } from '@/stores/authStore';
 import { Card } from '@/components/Card';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import { reseed } from '@/db/seedData';
 import { pingOllama } from '@/services/ollama';
+import { uploadApk, deleteApk, formatBytes, getApkInfo, OFFICIAL_LINKS } from '@/services/bitchat';
 
 export default function Settings() {
   const { t } = useTranslation();
@@ -108,6 +111,8 @@ export default function Settings() {
         </div>
       </Card>
 
+      <BitchatApkSection />
+
       <Card title={t('settings.data_section')}>
         <p className="text-sm text-slate-400 mb-3">
           All data lives locally in IndexedDB. Resetting only affects this device.
@@ -145,5 +150,158 @@ function Field({
         className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none font-mono"
       />
     </div>
+  );
+}
+
+// =========================================================================
+// Bitchat APK upload (admin-only)
+// =========================================================================
+
+function BitchatApkSection() {
+  const { t } = useTranslation();
+  const user = useAuthStore((s) => s.user);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState('');
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+
+  const apkInfo = useLiveQuery(() => getApkInfo('bitchat-android'), []);
+
+  // Hide entirely for non-admin / non-data_manager users
+  if (!user) return null;
+  const canUpload = user.role === 'admin' || user.role === 'data_manager';
+  if (!canUpload && !apkInfo) return null;
+
+  const onPick = (f: File) => {
+    if (!f.name.toLowerCase().endsWith('.apk')) {
+      alert('Please choose a .apk file');
+      return;
+    }
+    setPendingFile(f);
+    // Try to extract a version-like substring from the filename
+    const m = f.name.match(/(\d+\.\d+(?:\.\d+)?)/);
+    if (m) setVersion(m[1]);
+  };
+
+  const onUpload = async () => {
+    if (!pendingFile || !user) return;
+    setBusy(true);
+    try {
+      await uploadApk(pendingFile, {
+        app: 'bitchat-android',
+        version: version || 'unknown',
+        uploaded_by: user.user_id,
+        release_url: OFFICIAL_LINKS.androidReleases,
+      });
+      setPendingFile(null);
+      setVersion('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (e) {
+      alert((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDelete = async () => {
+    if (!confirm('Delete the uploaded Bitchat APK? Field teams will lose offline access.')) return;
+    await deleteApk('bitchat-android');
+  };
+
+  return (
+    <Card
+      title={
+        <div className="flex items-center gap-2">
+          <Smartphone size={14} /> {t('chat.settings_section')}
+        </div>
+      }
+    >
+      <p className="text-sm text-slate-400 mb-4">
+        {t('chat.settings_help', { url: '' }).replace('{{url}}', '')}
+        <a
+          href={OFFICIAL_LINKS.androidReleases}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-brand underline inline-flex items-center gap-1 ms-1"
+        >
+          github.com/permissionlesstech/bitchat-android <ExternalLink size={11} />
+        </a>
+      </p>
+
+      {apkInfo ? (
+        <div className="bg-priority-normal/10 border border-priority-normal/30 rounded-lg p-3 mb-4 flex items-start gap-3">
+          <CheckCircle2 size={18} className="text-priority-normal flex-shrink-0 mt-0.5" />
+          <div className="flex-1 text-sm">
+            <div className="font-semibold text-priority-normal">{t('chat.uploaded_apk')}</div>
+            <div className="text-xs text-slate-400 mt-1 space-y-0.5">
+              <div>
+                <span className="font-medium text-slate-300">{apkInfo.filename}</span>
+              </div>
+              <div>
+                {t('chat.version_label')}: v{apkInfo.version} · {formatBytes(apkInfo.size_bytes)}
+              </div>
+              <div>
+                Uploaded {new Date(apkInfo.uploaded_at).toLocaleString()}{' '}
+                {apkInfo.uploaded_by && `by ${apkInfo.uploaded_by}`}
+              </div>
+            </div>
+          </div>
+          {canUpload && (
+            <button
+              onClick={() => void onDelete()}
+              className="touch-target p-2 hover:bg-priority-critical/10 hover:text-priority-critical text-slate-500 rounded-lg"
+              aria-label={t('chat.delete_apk')}
+              title={t('chat.delete_apk')}
+            >
+              <Trash2 size={16} />
+            </button>
+          )}
+        </div>
+      ) : (
+        canUpload && (
+          <p className="text-xs text-slate-500 mb-3">
+            No APK uploaded yet. Pick the .apk you downloaded from the official releases.
+          </p>
+        )
+      )}
+
+      {canUpload && (
+        <div className="space-y-3">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".apk,application/vnd.android.package-archive"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onPick(f);
+            }}
+            className="block w-full text-sm text-slate-300 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-surface-light file:text-slate-200 hover:file:bg-slate-600"
+          />
+          {pendingFile && (
+            <>
+              <div className="flex items-center justify-between text-xs bg-surface-light px-3 py-2 rounded">
+                <span className="truncate">
+                  {pendingFile.name} · {formatBytes(pendingFile.size)}
+                </span>
+              </div>
+              <Field
+                label={`${t('chat.version_label')} (e.g. 1.4.2)`}
+                value={version}
+                onChange={setVersion}
+                placeholder="1.0.0"
+              />
+              <button
+                onClick={() => void onUpload()}
+                disabled={busy}
+                className="touch-target px-4 py-2 bg-brand hover:bg-brand-dark disabled:opacity-50 rounded-lg text-sm font-semibold flex items-center gap-2"
+              >
+                <Upload size={14} />
+                {busy ? '…' : t('chat.upload_apk')}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }

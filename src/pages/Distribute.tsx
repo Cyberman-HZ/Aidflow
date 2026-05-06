@@ -36,6 +36,9 @@ import {
   Clock,
   RotateCcw,
   Sparkles,
+  Users,
+  Info,
+  Save,
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
@@ -47,13 +50,14 @@ import StatusBadge, { ALLOWED_TRANSITIONS } from '@/components/StatusBadge';
 import AIChat from '@/components/AIChat';
 import { computeRuleScore, sortByScore } from '@/services/priorityRules';
 import { recomputeAfterUpdate } from '@/services/ollama';
+import { formatOrderNumber, nextOrderNumber } from '@/services/orderNumber';
 import { useAuthStore } from '@/stores/authStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type {
   Family,
   AidDistribution,
   PrioritizationResult,
-  User,
+  Worker,
   DistributionStatus,
 } from '@/types';
 
@@ -191,10 +195,10 @@ function ActiveOrders() {
     []
   ) ?? [];
   const families = useLiveQuery(() => db.families.toArray()) ?? [];
-  const users = useLiveQuery(() => db.users.toArray()) ?? [];
+  const workers = useLiveQuery(() => db.workers.toArray()) ?? [];
 
   const familyMap = useMemo(() => new Map(families.map((f) => [f.family_id, f])), [families]);
-  const userMap = useMemo(() => new Map(users.map((u) => [u.user_id, u])), [users]);
+  const workerMap = useMemo(() => new Map(workers.map((w) => [w.id, w])), [workers]);
 
   const [statusFilter, setStatusFilter] = useState<DistributionStatus | ''>('');
   const [sectorFilter, setSectorFilter] = useState('');
@@ -241,6 +245,18 @@ function ActiveOrders() {
       return b.created_at.localeCompare(a.created_at);
     });
   }, [orders, statusFilter, sectorFilter, search, familyMap]);
+
+  // Workers currently out_for_delivery on some other order — passed down to
+  // OrderCard so its Reassign action rejects re-assigning to a busy worker.
+  const busyByUserId = useMemo(() => {
+    const map = new Map<string, AidDistribution>();
+    for (const o of orders) {
+      if (o.status === 'out_for_delivery' && o.assigned_to) {
+        map.set(o.assigned_to, o);
+      }
+    }
+    return map;
+  }, [orders]);
 
   return (
     <div className="space-y-4">
@@ -294,8 +310,9 @@ function ActiveOrders() {
               key={o.distribution_id}
               order={o}
               family={familyMap.get(o.family_id)}
-              assignedTo={o.assigned_to ? userMap.get(o.assigned_to) : undefined}
-              users={users}
+              assignedTo={o.assigned_to ? workerMap.get(o.assigned_to) : undefined}
+              workers={workers}
+              busyByUserId={busyByUserId}
               onFeedback={setToast}
             />
           ))}
@@ -337,13 +354,15 @@ function OrderCard({
   order,
   family,
   assignedTo,
-  users,
+  workers,
+  busyByUserId,
   onFeedback,
 }: {
   order: AidDistribution;
   family?: Family;
-  assignedTo?: User;
-  users: User[];
+  assignedTo?: Worker;
+  workers: Worker[];
+  busyByUserId: Map<string, AidDistribution>;
   onFeedback?: (t: FeedbackToast) => void;
 }) {
   const { t } = useTranslation();
@@ -351,9 +370,13 @@ function OrderCard({
   const currentUser = useAuthStore((s) => s.user);
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Mutually-exclusive inline edit form. null = no form open.
+  const [editing, setEditing] = useState<'reassign' | 'schedule' | 'edit' | null>(null);
 
   const totalQty = order.items_distributed.reduce((a, b) => a + b.quantity, 0);
   const allowed = ALLOWED_TRANSITIONS[order.status];
+  const isPending = order.status === 'pending';
+  const isOutForDelivery = order.status === 'out_for_delivery';
 
   const transition = async (next: DistributionStatus) => {
     if (busy || !currentUser) return;
@@ -368,7 +391,12 @@ function OrderCard({
 
       if (next === 'delivered') {
         patch.delivered_at = now;
-        patch.delivered_by = currentUser.user_id;
+        // delivered_by points at a Worker (per v7 migration). Prefer the
+        // already-assigned worker; if none, fall back to a worker linked to
+        // the currently logged-in user (so admins/field workers who confirm
+        // their own deliveries still get attributed correctly).
+        const linkedWorker = await db.workers.where('user_id').equals(currentUser.user_id).first();
+        patch.delivered_by = order.assigned_to ?? linkedWorker?.id;
         const note = prompt(t('distribute.deliver_notes_prompt') ?? 'Post-delivery notes (optional):');
         if (note) patch.post_update_notes = note;
         const flagNew = confirm(t('distribute.flag_new_need_prompt') ?? 'Flag a new urgent need at this family?');
@@ -450,16 +478,23 @@ function OrderCard({
     }
   };
 
-  const reassign = async () => {
-    const choices = users.map((u) => `${u.user_id}: ${u.name} (${u.role})`).join('\n');
-    const id = prompt(
-      `${t('distribute.assign_to_prompt') ?? 'Assigned-to user_id?'}\n\n${choices}`,
-      order.assigned_to ?? ''
-    );
-    if (id == null) return;
+  const saveAssignment = async (newAssignee: string) => {
     await db.distributions.update(order.distribution_id, {
-      assigned_to: id || undefined,
+      assigned_to: newAssignee || undefined,
     });
+    setEditing(null);
+  };
+
+  const saveSchedule = async (iso: string | null) => {
+    await db.distributions.update(order.distribution_id, {
+      scheduled_for: iso ?? undefined,
+    });
+    setEditing(null);
+  };
+
+  const saveEdits = async (patch: { items_distributed: AidDistribution['items_distributed']; notes?: string }) => {
+    await db.distributions.update(order.distribution_id, patch);
+    setEditing(null);
   };
 
   const onDelete = async () => {
@@ -477,6 +512,9 @@ function OrderCard({
         <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setExpanded(!expanded)}>
           <div className="flex items-center gap-2 flex-wrap">
             <StatusBadge status={order.status} size="sm" />
+            <span className="text-xs font-mono font-semibold bg-brand/15 text-brand px-2 py-0.5 rounded">
+              {formatOrderNumber(order.order_number)}
+            </span>
             {family ? (
               <Link
                 to={`/families/${family.family_id}`}
@@ -515,7 +553,9 @@ function OrderCard({
             </span>
             {family?.location_sector && <span>{family.location_sector}</span>}
             <span>
-              {assignedTo ? `→ ${assignedTo.name}` : t('distribute.unassigned')}
+              {assignedTo
+                ? `→ ${assignedTo.first_name} ${assignedTo.last_name}`
+                : t('distribute.unassigned')}
             </span>
             <span>
               {order.items_distributed.length} item type
@@ -534,58 +574,114 @@ function OrderCard({
         </div>
       </div>
 
-      {/* Action row — visible always */}
-      <div className="mt-3 flex flex-wrap gap-2 items-center">
-        {allowed.includes('out_for_delivery') && (
+      {/* Inline edit forms (mutually exclusive — only one open at a time) */}
+      {editing === 'reassign' && (
+        <ReassignPanel
+          workers={workers}
+          busyByUserId={busyByUserId}
+          currentDistributionId={order.distribution_id}
+          currentAssignee={order.assigned_to}
+          onSave={saveAssignment}
+          onClose={() => setEditing(null)}
+        />
+      )}
+      {editing === 'schedule' && (
+        <SchedulePanel
+          currentScheduledFor={order.scheduled_for}
+          onSave={saveSchedule}
+          onClose={() => setEditing(null)}
+        />
+      )}
+      {editing === 'edit' && (
+        <EditPanel
+          order={order}
+          onSave={saveEdits}
+          onClose={() => setEditing(null)}
+        />
+      )}
+
+      {/* Action row — hidden while an inline editor is open */}
+      {!editing && (
+        <div className="mt-3 flex flex-wrap gap-2 items-center">
+          {allowed.includes('out_for_delivery') && (
+            <button
+              onClick={() => void transition('out_for_delivery')}
+              disabled={busy}
+              className="touch-target px-3 py-1.5 bg-priority-medium/15 hover:bg-priority-medium/25 text-priority-medium border border-priority-medium/30 rounded-lg text-xs font-semibold flex items-center gap-1"
+            >
+              <Truck size={12} />{' '}
+              {order.status === 'failed' ? t('distribute.action.retry') : t('distribute.action.dispatch')}
+            </button>
+          )}
+          {allowed.includes('delivered') && (
+            <button
+              onClick={() => void transition('delivered')}
+              disabled={busy}
+              className="touch-target px-3 py-1.5 bg-priority-normal/15 hover:bg-priority-normal/25 text-priority-normal border border-priority-normal/30 rounded-lg text-xs font-semibold flex items-center gap-1"
+            >
+              <CheckCircle2 size={12} /> {t('distribute.action.mark_delivered')}
+            </button>
+          )}
+          {allowed.includes('failed') && (
+            <button
+              onClick={() => void transition('failed')}
+              disabled={busy}
+              className="touch-target px-3 py-1.5 bg-priority-critical/10 hover:bg-priority-critical/20 text-priority-critical border border-priority-critical/30 rounded-lg text-xs font-semibold flex items-center gap-1"
+            >
+              <AlertTriangle size={12} /> {t('distribute.action.mark_failed')}
+            </button>
+          )}
+          {allowed.includes('cancelled') && (
+            <button
+              onClick={() => void transition('cancelled')}
+              disabled={busy}
+              className="touch-target px-3 py-1.5 bg-surface-light hover:bg-slate-600 text-slate-300 rounded-lg text-xs flex items-center gap-1"
+            >
+              <XCircle size={12} /> {t('distribute.action.cancel')}
+            </button>
+          )}
+
+          {/* Pending-only edit affordances */}
+          {isPending && (
+            <>
+              <button
+                onClick={() => setEditing('schedule')}
+                className="touch-target px-3 py-1.5 bg-surface-light hover:bg-slate-600 text-slate-300 rounded-lg text-xs flex items-center gap-1"
+              >
+                <Calendar size={12} /> {t('distribute.action.schedule')}
+              </button>
+              <button
+                onClick={() => setEditing('edit')}
+                className="touch-target px-3 py-1.5 bg-surface-light hover:bg-slate-600 text-slate-300 rounded-lg text-xs flex items-center gap-1"
+              >
+                <Edit2 size={12} /> {t('distribute.action.edit')}
+              </button>
+              <button
+                onClick={() => setEditing('reassign')}
+                className="touch-target px-3 py-1.5 bg-surface-light hover:bg-slate-600 text-slate-300 rounded-lg text-xs flex items-center gap-1"
+              >
+                <Users size={12} /> {t('distribute.action.reassign')}
+              </button>
+            </>
+          )}
+
+          {/* Out-for-delivery: reassign deliberately omitted (worker is en route);
+              show a disabled hint so supervisors don't look for it. */}
+          {isOutForDelivery && (
+            <span className="px-3 py-1.5 text-xs text-slate-500 italic flex items-center gap-1">
+              <Info size={11} /> {t('distribute.reassign_blocked_in_flight')}
+            </span>
+          )}
+
           <button
-            onClick={() => void transition('out_for_delivery')}
-            disabled={busy}
-            className="touch-target px-3 py-1.5 bg-priority-medium/15 hover:bg-priority-medium/25 text-priority-medium border border-priority-medium/30 rounded-lg text-xs font-semibold flex items-center gap-1"
+            onClick={() => void onDelete()}
+            className="touch-target px-3 py-1.5 hover:bg-priority-critical/10 hover:text-priority-critical text-slate-500 rounded-lg text-xs flex items-center gap-1 ms-auto"
+            aria-label={t('distribute.action.delete')}
           >
-            <Truck size={12} /> {order.status === 'failed' ? t('distribute.action.retry') : t('distribute.action.dispatch')}
+            <Trash2 size={12} />
           </button>
-        )}
-        {allowed.includes('delivered') && (
-          <button
-            onClick={() => void transition('delivered')}
-            disabled={busy}
-            className="touch-target px-3 py-1.5 bg-priority-normal/15 hover:bg-priority-normal/25 text-priority-normal border border-priority-normal/30 rounded-lg text-xs font-semibold flex items-center gap-1"
-          >
-            <CheckCircle2 size={12} /> {t('distribute.action.mark_delivered')}
-          </button>
-        )}
-        {allowed.includes('failed') && (
-          <button
-            onClick={() => void transition('failed')}
-            disabled={busy}
-            className="touch-target px-3 py-1.5 bg-priority-critical/10 hover:bg-priority-critical/20 text-priority-critical border border-priority-critical/30 rounded-lg text-xs font-semibold flex items-center gap-1"
-          >
-            <AlertTriangle size={12} /> {t('distribute.action.mark_failed')}
-          </button>
-        )}
-        {allowed.includes('cancelled') && (
-          <button
-            onClick={() => void transition('cancelled')}
-            disabled={busy}
-            className="touch-target px-3 py-1.5 bg-surface-light hover:bg-slate-600 text-slate-300 rounded-lg text-xs flex items-center gap-1"
-          >
-            <XCircle size={12} /> {t('distribute.action.cancel')}
-          </button>
-        )}
-        <button
-          onClick={() => void reassign()}
-          className="touch-target px-3 py-1.5 bg-surface-light hover:bg-slate-600 text-slate-300 rounded-lg text-xs flex items-center gap-1"
-        >
-          <Edit2 size={12} /> {t('distribute.action.reassign')}
-        </button>
-        <button
-          onClick={() => void onDelete()}
-          className="touch-target px-3 py-1.5 hover:bg-priority-critical/10 hover:text-priority-critical text-slate-500 rounded-lg text-xs flex items-center gap-1 ms-auto"
-          aria-label={t('distribute.action.delete')}
-        >
-          <Trash2 size={12} />
-        </button>
-      </div>
+        </div>
+      )}
 
       {expanded && (
         <div className="mt-3 pt-3 border-t border-slate-700 space-y-2 text-xs">
@@ -632,7 +728,22 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
   const { t } = useTranslation();
   const user = useAuthStore((s) => s.user);
   const families = useLiveQuery(() => db.families.toArray()) ?? [];
-  const users = useLiveQuery(() => db.users.toArray()) ?? [];
+  const workers = useLiveQuery(() => db.workers.toArray()) ?? [];
+
+  // Workers currently dispatched on a delivery shouldn't be eligible for new
+  // orders until they finish (mark delivered/failed/cancelled). We watch the
+  // out_for_delivery set live so the dropdown reflects reality.
+  const inFlight = useLiveQuery(
+    () => db.distributions.where('status').equals('out_for_delivery').toArray(),
+    []
+  ) ?? [];
+  const busyByWorkerId = useMemo(() => {
+    const map = new Map<string, AidDistribution>();
+    for (const d of inFlight) {
+      if (d.assigned_to) map.set(d.assigned_to, d);
+    }
+    return map;
+  }, [inFlight]);
 
   const [step, setStep] = useState(1);
   const [sector, setSector] = useState('');
@@ -681,8 +792,10 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
       const now = new Date().toISOString();
       const score =
         selectedFamily.priority_score ?? computeRuleScore(selectedFamily).priority_score;
+      const order_number = await nextOrderNumber();
       const order: AidDistribution = {
         distribution_id: `D-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        order_number,
         family_id: selectedFamily.family_id,
         session_id: `S-${now.slice(0, 10)}`,
         status: dispatchNow ? 'out_for_delivery' : 'pending',
@@ -895,18 +1008,31 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
               </label>
               <select
                 value={assignedTo}
-                onChange={(e) => setAssignedTo(e.target.value)}
+                onChange={(e) => {
+                  // Defensive: don't allow setting a busy worker even if the
+                  // dropdown's `disabled` is bypassed (e.g. via DevTools).
+                  const v = e.target.value;
+                  if (v && busyByWorkerId.has(v)) return;
+                  setAssignedTo(v);
+                }}
                 className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
               >
                 <option value="">{t('distribute.unassigned')}</option>
-                {users
-                  .filter((u) => u.role === 'field_worker' || u.role === 'supervisor')
-                  .map((u) => (
-                    <option key={u.user_id} value={u.user_id}>
-                      {u.name} ({u.role.replace('_', ' ')})
+                {workers.map((w) => {
+                  const busy = busyByWorkerId.get(w.id);
+                  return (
+                    <option key={w.id} value={w.id} disabled={!!busy}>
+                      {w.first_name} {w.last_name} ({w.position})
+                      {busy ? ` — ${t('distribute.busy_label')}` : ''}
                     </option>
-                  ))}
+                  );
+                })}
               </select>
+              {busyByWorkerId.size > 0 && (
+                <p className="text-[11px] text-slate-500 mt-1.5 italic">
+                  {t('distribute.busy_hint', { count: busyByWorkerId.size })}
+                </p>
+              )}
             </div>
 
             <div>
@@ -1031,6 +1157,289 @@ function WizardAIHelper({ family }: { family: Family }) {
   );
 }
 
+// =========================================================================
+// Inline order edit panels
+// =========================================================================
+
+function ReassignPanel({
+  workers,
+  busyByUserId,
+  currentDistributionId,
+  currentAssignee,
+  onSave,
+  onClose,
+}: {
+  workers: Worker[];
+  busyByUserId: Map<string, AidDistribution>;
+  currentDistributionId: string;
+  currentAssignee?: string;
+  onSave: (id: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [picked, setPicked] = useState<string>(currentAssignee ?? '');
+
+  // Available = workers who aren't busy on a different order.
+  // The current assignee remains selectable so the supervisor can keep them.
+  const isAvailable = (w: Worker) => {
+    const b = busyByUserId.get(w.id);
+    return !b || b.distribution_id === currentDistributionId;
+  };
+  const available = workers.filter(isAvailable);
+
+  return (
+    <div className="mt-3 bg-surface-light border border-brand/30 rounded-lg p-3 space-y-2">
+      <div className="text-xs font-semibold text-brand flex items-center gap-1.5">
+        <Users size={12} /> {t('distribute.reassign_to')}
+      </div>
+      {available.length === 0 ? (
+        <div className="text-xs text-priority-medium italic">
+          {t('distribute.no_available_workers')}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          <label
+            className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm ${
+              picked === '' ? 'bg-brand/15 ring-1 ring-brand/40' : 'hover:bg-surface-deep'
+            }`}
+          >
+            <input
+              type="radio"
+              checked={picked === ''}
+              onChange={() => setPicked('')}
+              className="accent-brand"
+            />
+            <span className="text-slate-400 italic">{t('distribute.unassigned')}</span>
+          </label>
+          {available.map((w) => (
+            <label
+              key={w.id}
+              className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm ${
+                picked === w.id ? 'bg-brand/15 ring-1 ring-brand/40' : 'hover:bg-surface-deep'
+              }`}
+            >
+              <input
+                type="radio"
+                checked={picked === w.id}
+                onChange={() => setPicked(w.id)}
+                className="accent-brand"
+              />
+              <span className="font-medium">
+                {w.first_name} {w.last_name}
+              </span>
+              <span className="text-xs text-slate-500">({w.position})</span>
+              {currentAssignee === w.id && (
+                <span className="text-[10px] text-brand ms-auto">current</span>
+              )}
+            </label>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-2 pt-2">
+        <button
+          onClick={() => void onSave(picked)}
+          className="touch-target px-3 py-1.5 bg-brand hover:bg-brand-dark text-white rounded text-xs font-semibold flex items-center gap-1"
+        >
+          <Save size={12} /> {t('distribute.save')}
+        </button>
+        <button
+          onClick={onClose}
+          className="touch-target px-3 py-1.5 bg-surface-deep hover:bg-slate-700 text-slate-300 rounded text-xs flex items-center gap-1"
+        >
+          <X size={12} /> {t('common.cancel')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SchedulePanel({
+  currentScheduledFor,
+  onSave,
+  onClose,
+}: {
+  currentScheduledFor?: string;
+  onSave: (iso: string | null) => Promise<void>;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  // <input type="datetime-local"> wants format "YYYY-MM-DDTHH:mm" without timezone.
+  const toLocalInput = (iso?: string) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+      d.getHours()
+    )}:${pad(d.getMinutes())}`;
+  };
+  const [value, setValue] = useState(toLocalInput(currentScheduledFor));
+
+  const handleSave = () => {
+    if (!value) {
+      void onSave(null); // clear schedule
+      return;
+    }
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return;
+    void onSave(d.toISOString());
+  };
+
+  return (
+    <div className="mt-3 bg-surface-light border border-brand/30 rounded-lg p-3 space-y-2">
+      <div className="text-xs font-semibold text-brand flex items-center gap-1.5">
+        <Calendar size={12} /> {t('distribute.schedule_for')}
+      </div>
+      <input
+        type="datetime-local"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
+      />
+      <p className="text-[11px] text-slate-500">{t('distribute.schedule_hint')}</p>
+      <div className="flex gap-2 pt-1">
+        <button
+          onClick={handleSave}
+          className="touch-target px-3 py-1.5 bg-brand hover:bg-brand-dark text-white rounded text-xs font-semibold flex items-center gap-1"
+        >
+          <Save size={12} /> {t('distribute.save')}
+        </button>
+        {currentScheduledFor && (
+          <button
+            onClick={() => void onSave(null)}
+            className="touch-target px-3 py-1.5 bg-surface-deep hover:bg-slate-700 text-slate-300 rounded text-xs flex items-center gap-1"
+          >
+            <X size={12} /> {t('distribute.clear_schedule')}
+          </button>
+        )}
+        <button
+          onClick={onClose}
+          className="touch-target px-3 py-1.5 bg-surface-deep hover:bg-slate-700 text-slate-300 rounded text-xs flex items-center gap-1 ms-auto"
+        >
+          {t('common.cancel')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function EditPanel({
+  order,
+  onSave,
+  onClose,
+}: {
+  order: AidDistribution;
+  onSave: (patch: { items_distributed: AidDistribution['items_distributed']; notes?: string }) => Promise<void>;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [items, setItems] = useState<LineItem[]>(
+    order.items_distributed.map((i) => ({ ...i }))
+  );
+  const [notes, setNotes] = useState(order.notes ?? '');
+
+  const updateItem = (i: number, patch: Partial<LineItem>) =>
+    setItems((arr) => arr.map((it, idx) => (idx === i ? { ...it, ...patch } : it)));
+  const addItem = () =>
+    setItems((arr) => [...arr, { item_name: '', quantity: 1, category: 'general' }]);
+  const removeItem = (i: number) => setItems((arr) => arr.filter((_, idx) => idx !== i));
+
+  const handleSave = () => {
+    const cleaned = items.filter((i) => i.item_name.trim());
+    if (cleaned.length === 0) {
+      alert(t('distribute.edit_at_least_one_item'));
+      return;
+    }
+    void onSave({ items_distributed: cleaned, notes: notes.trim() || undefined });
+  };
+
+  return (
+    <div className="mt-3 bg-surface-light border border-brand/30 rounded-lg p-3 space-y-3">
+      <div className="text-xs font-semibold text-brand flex items-center gap-1.5">
+        <Edit2 size={12} /> {t('distribute.edit_order')}
+      </div>
+      <div>
+        <label className="block text-[11px] text-slate-400 mb-1.5 font-medium">
+          {t('distribute.items')}
+        </label>
+        <div className="space-y-1.5">
+          {items.map((it, i) => (
+            <div key={i} className="flex gap-1.5 items-center">
+              <select
+                value={it.item_name}
+                onChange={(e) => {
+                  const tmpl = ITEM_TEMPLATES.find((tt) => tt.name === e.target.value);
+                  updateItem(i, {
+                    item_name: e.target.value,
+                    category: tmpl?.category ?? it.category,
+                  });
+                }}
+                className="flex-1 bg-surface-deep border border-slate-700 rounded px-2 py-1.5 text-xs"
+              >
+                <option value="">— {t('distribute.add_item')} —</option>
+                {ITEM_TEMPLATES.map((tmpl) => (
+                  <option key={tmpl.name} value={tmpl.name}>
+                    {tmpl.name}
+                  </option>
+                ))}
+                {/* Preserve any custom item that's not in the template list */}
+                {it.item_name && !ITEM_TEMPLATES.some((tt) => tt.name === it.item_name) && (
+                  <option value={it.item_name}>{it.item_name}</option>
+                )}
+              </select>
+              <input
+                type="number"
+                min={1}
+                value={it.quantity}
+                onChange={(e) => updateItem(i, { quantity: Math.max(1, +e.target.value) })}
+                className="w-16 bg-surface-deep border border-slate-700 rounded px-2 py-1.5 text-xs text-center"
+              />
+              <button
+                onClick={() => removeItem(i)}
+                className="p-1 hover:bg-red-500/10 hover:text-red-400 rounded"
+                aria-label="Remove item"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+          <button
+            onClick={addItem}
+            className="text-xs text-brand hover:underline flex items-center gap-1"
+          >
+            <Plus size={12} /> {t('distribute.add_item')}
+          </button>
+        </div>
+      </div>
+      <div>
+        <label className="block text-[11px] text-slate-400 mb-1.5 font-medium">
+          {t('distribute.creator_notes')}
+        </label>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={2}
+          className="w-full bg-surface-deep border border-slate-700 rounded px-2 py-1.5 text-xs"
+          placeholder="e.g. Handle with care; ask for the eldest daughter."
+        />
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={handleSave}
+          className="touch-target px-3 py-1.5 bg-brand hover:bg-brand-dark text-white rounded text-xs font-semibold flex items-center gap-1"
+        >
+          <Save size={12} /> {t('distribute.save')}
+        </button>
+        <button
+          onClick={onClose}
+          className="touch-target px-3 py-1.5 bg-surface-deep hover:bg-slate-700 text-slate-300 rounded text-xs flex items-center gap-1 ms-auto"
+        >
+          <X size={12} /> {t('common.cancel')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Stepper({ step }: { step: number }) {
   const { t } = useTranslation();
   const labels = [
@@ -1073,7 +1482,7 @@ function DistributionHistory() {
     []
   ) ?? [];
   const families = useLiveQuery(() => db.families.toArray()) ?? [];
-  const users = useLiveQuery(() => db.users.toArray()) ?? [];
+  const workers = useLiveQuery(() => db.workers.toArray()) ?? [];
 
   const [sector, setSector] = useState('');
   const [worker, setWorker] = useState('');
@@ -1088,7 +1497,7 @@ function DistributionHistory() {
   );
 
   const familyMap = useMemo(() => new Map(families.map((f) => [f.family_id, f])), [families]);
-  const userMap = useMemo(() => new Map(users.map((u) => [u.user_id, u])), [users]);
+  const workerMap = useMemo(() => new Map(workers.map((w) => [w.id, w])), [workers]);
 
   const filtered = useMemo(() => {
     let list = [...orders];
@@ -1140,17 +1549,18 @@ function DistributionHistory() {
 
   const exportCSV = () => {
     const headers = [
-      'distribution_id', 'family_id', 'family_name', 'sector', 'status',
+      'order_number', 'distribution_id', 'family_id', 'family_name', 'sector', 'status',
       'created_at', 'delivered_at', 'delivered_by', 'delivered_by_name',
       'items', 'priority_score', 'flagged', 'notes', 'failure_reason',
     ];
     const rows = filtered.map((d) => {
       const fam = familyMap.get(d.family_id);
-      const u = d.delivered_by ? userMap.get(d.delivered_by) : undefined;
+      const w = d.delivered_by ? workerMap.get(d.delivered_by) : undefined;
       return [
+        formatOrderNumber(d.order_number),
         d.distribution_id, d.family_id, fam?.head_name ?? '', fam?.location_sector ?? '',
         d.status, d.created_at, d.delivered_at ?? '',
-        d.delivered_by ?? '', u?.name ?? '',
+        d.delivered_by ?? '', w ? `${w.first_name} ${w.last_name}` : '',
         d.items_distributed.map((i) => `${i.item_name} x${i.quantity}`).join('; '),
         d.ai_priority_score, d.new_needs_flagged ? 'yes' : '',
         d.post_update_notes ?? '', d.failure_reason ?? '',
@@ -1196,9 +1606,9 @@ function DistributionHistory() {
               className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
             >
               <option value="">{t('distribute.filter_worker_all')}</option>
-              {users.map((u) => (
-                <option key={u.user_id} value={u.user_id}>
-                  {u.name} ({u.role.replace('_', ' ')})
+              {workers.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.first_name} {w.last_name} ({w.position})
                 </option>
               ))}
             </select>
@@ -1293,9 +1703,9 @@ function DistributionHistory() {
               family={familyMap.get(d.family_id)}
               worker={
                 d.delivered_by
-                  ? userMap.get(d.delivered_by)
+                  ? workerMap.get(d.delivered_by)
                   : d.assigned_to
-                  ? userMap.get(d.assigned_to)
+                  ? workerMap.get(d.assigned_to)
                   : undefined
               }
               onRetry={async () => {
@@ -1324,7 +1734,7 @@ function HistoryRow({
 }: {
   distribution: AidDistribution;
   family?: Family;
-  worker?: User;
+  worker?: Worker;
   onRetry: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -1339,6 +1749,9 @@ function HistoryRow({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <StatusBadge status={distribution.status} size="sm" />
+            <span className="text-xs font-mono font-semibold bg-brand/15 text-brand px-2 py-0.5 rounded">
+              {formatOrderNumber(distribution.order_number)}
+            </span>
             {family ? (
               <Link
                 to={`/families/${family.family_id}`}
@@ -1363,7 +1776,7 @@ function HistoryRow({
               {new Date(when).toLocaleString()}
             </span>
             {family?.location_sector && <span>{family.location_sector}</span>}
-            <span>by {worker?.name ?? distribution.delivered_by ?? distribution.assigned_to ?? '—'}</span>
+            <span>by {worker ? `${worker.first_name} ${worker.last_name}` : distribution.delivered_by ?? distribution.assigned_to ?? '—'}</span>
             <span>
               {distribution.items_distributed.length} item type
               {distribution.items_distributed.length === 1 ? '' : 's'} · {totalQty} total

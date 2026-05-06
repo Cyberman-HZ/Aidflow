@@ -16,6 +16,7 @@ import {
   STATUS_LABEL as STARLINK_STATUS_LABEL,
   LAST_UPDATED as STARLINK_COUNTRIES_UPDATED,
 } from '@/services/starlinkCountries';
+import { formatOrderNumber } from '@/services/orderNumber';
 import type {
   Family,
   AidDistribution,
@@ -25,11 +26,13 @@ import type {
   StarlinkReseller,
   BitchatMessage,
   Continent,
+  Worker,
 } from '@/types';
 
 export interface AppSnapshot {
   families: Family[];
   distributions: AidDistribution[];
+  workers: Worker[];
   documents: KnowledgeDocument[];
   guides: AidGuide[];
   kids: KidsContent[];
@@ -38,16 +41,18 @@ export interface AppSnapshot {
 }
 
 export async function loadAppSnapshot(): Promise<AppSnapshot> {
-  const [families, distributions, documents, guides, kids, resellers, messages] = await Promise.all([
-    db.families.toArray(),
-    db.distributions.toArray(),
-    db.documents.toArray(),
-    db.guides.toArray(),
-    db.kids.toArray(),
-    db.resellers.toArray(),
-    db.messages.toArray(),
-  ]);
-  return { families, distributions, documents, guides, kids, resellers, messages };
+  const [families, distributions, workers, documents, guides, kids, resellers, messages] =
+    await Promise.all([
+      db.families.toArray(),
+      db.distributions.toArray(),
+      db.workers.toArray(),
+      db.documents.toArray(),
+      db.guides.toArray(),
+      db.kids.toArray(),
+      db.resellers.toArray(),
+      db.messages.toArray(),
+    ]);
+  return { families, distributions, workers, documents, guides, kids, resellers, messages };
 }
 
 // ---- Per-section serializers --------------------------------------------
@@ -79,44 +84,130 @@ function familiesBlock(families: Family[]): string {
   return `## FAMILIES (${families.length})\n${lines.join('\n')}\n`;
 }
 
-function distributionsBlock(d: AidDistribution[], families: Family[]): string {
+// Helper — render a single distribution order with EVERY field on the card so
+// the assistant can answer any question about any order ("show me ORD-007",
+// "who delivered the order to Ahmed last week", "why did D-… fail").
+function fmtFullOrder(
+  x: AidDistribution,
+  familyMap: Map<string, Family>,
+  workerMap: Map<string, Worker>
+): string {
+  const fam = familyMap.get(x.family_id);
+  const familyLabel = fam ? `${fam.head_name} (sector:${fam.location_sector}, ${fam.member_count} members)` : '?';
+
+  const workerLabel = (id?: string) => {
+    if (!id) return undefined;
+    const w = workerMap.get(id);
+    return w ? `${w.first_name} ${w.last_name} [${w.position}, ${w.id}]` : id;
+  };
+  const assignedLabel = workerLabel(x.assigned_to);
+  const deliveredByLabel = workerLabel(x.delivered_by);
+
+  const itemsLabel = x.items_distributed
+    .map((i) => `${i.item_name}×${i.quantity} (${i.category})`)
+    .join(', ');
+  const totalQty = x.items_distributed.reduce((a, b) => a + b.quantity, 0);
+
+  const priorityLevel =
+    x.ai_priority_score >= 80
+      ? 'CRITICAL'
+      : x.ai_priority_score >= 60
+      ? 'HIGH'
+      : x.ai_priority_score >= 40
+      ? 'MEDIUM'
+      : 'NORMAL';
+
+  const lines = [
+    `### ${formatOrderNumber(x.order_number)} — ${x.distribution_id}`,
+    `  status: ${x.status.toUpperCase()}`,
+    `  family: ${x.family_id} → ${familyLabel}`,
+    `  priority_at_creation: ${x.ai_priority_score}/${priorityLevel}`,
+    x.ai_reasoning ? `  ai_reasoning: "${x.ai_reasoning}"` : '',
+    `  items (${x.items_distributed.length} type${x.items_distributed.length === 1 ? '' : 's'}, ${totalQty} total): ${itemsLabel}`,
+    `  created_at: ${x.created_at} (by ${x.created_by})`,
+    x.scheduled_for ? `  scheduled_for: ${x.scheduled_for}` : '',
+    x.dispatched_at ? `  dispatched_at: ${x.dispatched_at}` : '',
+    x.delivered_at ? `  delivered_at: ${x.delivered_at}` : '',
+    x.closed_at ? `  closed_at: ${x.closed_at}` : '',
+    assignedLabel ? `  assigned_to: ${assignedLabel}` : '  assigned_to: UNASSIGNED',
+    deliveredByLabel ? `  delivered_by: ${deliveredByLabel}` : '',
+    x.notes ? `  pre_delivery_notes: "${x.notes}"` : '',
+    x.post_update_notes ? `  post_delivery_notes: "${x.post_update_notes}"` : '',
+    x.failure_reason ? `  failure_reason: "${x.failure_reason}"` : '',
+    x.new_needs_flagged ? `  flags: NEW_NEED_FLAGGED` : '',
+  ];
+  return lines.filter((l) => l).join('\n');
+}
+
+function distributionsBlock(d: AidDistribution[], families: Family[], workers: Worker[]): string {
   if (d.length === 0) return '## DISTRIBUTIONS\n— none —\n';
-  const familyMap = new Map(families.map((f) => [f.family_id, f.head_name]));
+  const familyMap = new Map(families.map((f) => [f.family_id, f]));
+  const workerMap = new Map(workers.map((w) => [w.id, w]));
 
   // Split into active (pending + out_for_delivery) vs completed
   const active = d.filter((x) => x.status === 'pending' || x.status === 'out_for_delivery');
   const closed = d.filter((x) => x.status !== 'pending' && x.status !== 'out_for_delivery');
 
-  const fmtActive = (x: AidDistribution) => {
-    const ageMin = Math.round((Date.now() - new Date(x.created_at).getTime()) / 60000);
-    const age = ageMin < 60 ? `${ageMin}m` : ageMin < 1440 ? `${Math.round(ageMin / 60)}h` : `${Math.round(ageMin / 1440)}d`;
-    const sched = x.scheduled_for ? ` | scheduled:${x.scheduled_for.slice(0, 16).replace('T', ' ')}` : '';
-    const assigned = x.assigned_to ? ` | assigned:${x.assigned_to}` : ' | UNASSIGNED';
-    return `${x.distribution_id} [${x.status.toUpperCase()}] | family:${x.family_id} (${familyMap.get(x.family_id) ?? '?'}) | created:${age}_ago${assigned}${sched} | items:${x.items_distributed.map((i) => `${i.item_name}×${i.quantity}`).join(', ')}${x.notes ? ` | notes:"${x.notes}"` : ''}`;
-  };
-
-  const fmtClosed = (x: AidDistribution) => {
-    const when = (x.delivered_at || x.closed_at || x.created_at).slice(0, 10);
-    const who = x.delivered_by ?? x.assigned_to ?? '?';
-    const reason = x.failure_reason ? ` | reason:"${x.failure_reason}"` : '';
-    const flag = x.new_needs_flagged ? ' | NEW_NEED_FLAGGED' : '';
-    const notes = x.post_update_notes ? ` | notes:"${x.post_update_notes}"` : '';
-    return `${x.distribution_id} [${x.status.toUpperCase()}] | family:${x.family_id} (${familyMap.get(x.family_id) ?? '?'}) | when:${when} | by:${who}${reason}${flag}${notes}`;
-  };
+  const sortedActive = [...active].sort((a, b) => {
+    if (a.status !== b.status) return a.status === 'pending' ? -1 : 1;
+    return b.created_at.localeCompare(a.created_at);
+  });
 
   const recentClosed = [...closed]
     .sort((a, b) =>
-      (b.delivered_at || b.closed_at || b.created_at).localeCompare(a.delivered_at || a.closed_at || a.created_at)
+      (b.delivered_at || b.closed_at || b.created_at).localeCompare(
+        a.delivered_at || a.closed_at || a.created_at
+      )
     )
-    .slice(0, 25);
+    .slice(0, 30);
 
   return [
     `## ACTIVE DISTRIBUTION ORDERS (${active.length}: ${active.filter((x) => x.status === 'pending').length} pending + ${active.filter((x) => x.status === 'out_for_delivery').length} out-for-delivery)`,
-    active.length === 0 ? '— none —' : active.map(fmtActive).join('\n'),
+    `(Each order below shows every field on the order card. Refer to orders by their ORD-### number first, then by distribution_id.)`,
+    sortedActive.length === 0 ? '— none —' : sortedActive.map((x) => fmtFullOrder(x, familyMap, workerMap)).join('\n\n'),
     ``,
-    `## DISTRIBUTION HISTORY (${closed.length} closed, showing last ${recentClosed.length})`,
-    recentClosed.length === 0 ? '— none —' : recentClosed.map(fmtClosed).join('\n'),
+    `## DISTRIBUTION HISTORY (${closed.length} closed, showing last ${recentClosed.length} most recent)`,
+    recentClosed.length === 0 ? '— none —' : recentClosed.map((x) => fmtFullOrder(x, familyMap, workerMap)).join('\n\n'),
   ].join('\n') + '\n';
+}
+
+function workersBlock(workers: Worker[], distributions: AidDistribution[]): string {
+  if (workers.length === 0) {
+    return '## WORKERS\n— no workers in the database — tell the user to add one in the Workers tab —\n';
+  }
+
+  // Compute per-worker stats so the assistant can answer "who is the busiest
+  // field worker", "show me Tariq's history", etc.
+  const stats = new Map<string, { active: number; out: number; delivered: number; failed: number; total: number }>();
+  for (const w of workers) {
+    stats.set(w.id, { active: 0, out: 0, delivered: 0, failed: 0, total: 0 });
+  }
+  for (const d of distributions) {
+    const wid = d.assigned_to ?? d.delivered_by;
+    if (!wid) continue;
+    const s = stats.get(wid);
+    if (!s) continue;
+    s.total++;
+    if (d.status === 'pending' || d.status === 'out_for_delivery') s.active++;
+    if (d.status === 'out_for_delivery') s.out++;
+    if (d.status === 'delivered') s.delivered++;
+    if (d.status === 'failed') s.failed++;
+  }
+
+  const lines = workers
+    .slice()
+    .sort((a, b) =>
+      `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`)
+    )
+    .map((w) => {
+      const s = stats.get(w.id)!;
+      const phone = w.phone ? ` | phone:${w.phone}` : '';
+      const notes = w.notes ? ` | notes:"${w.notes}"` : '';
+      const busy = s.out > 0 ? ' | CURRENTLY OUT FOR DELIVERY' : '';
+      return `${w.id} | ${w.first_name} ${w.last_name} | position:${w.position}${phone}${notes} | active:${s.active} delivered:${s.delivered} failed:${s.failed} total:${s.total}${busy}`;
+    });
+
+  return `## WORKERS (${workers.length} — field staff who deliver aid orders; not app users)\n${lines.join('\n')}\n`;
 }
 
 function documentsBlock(docs: KnowledgeDocument[]): string {
@@ -202,14 +293,16 @@ function resellersBlock(resellers: StarlinkReseller[]): string {
 function messagesBlock(m: BitchatMessage[]): string {
   if (m.length === 0) return '## BITCHAT\n— no messages —\n';
   const channels = Array.from(new Set(m.map((x) => x.channel))).sort();
+  const queued = m.filter((x) => x.status === 'queued' || x.status === 'failed').length;
   const recent = [...m]
     .sort((a, b) => b.sent_at.localeCompare(a.sent_at))
     .slice(0, 30)
     .reverse();
   const lines = recent.map(
-    (x) => `${x.channel} | ${x.author} | ${x.sent_at.slice(0, 16).replace('T', ' ')} | via:${x.delivered_via} | ${x.body}`
+    (x) =>
+      `${x.channel} | ${x.author} | ${x.sent_at.slice(0, 16).replace('T', ' ')} | status:${x.status}${x.delivered_via ? ' via:' + x.delivered_via : ''} | ${x.body}`
   );
-  return `## BITCHAT — channels: ${channels.join(', ')} | messages: ${m.length} (showing last ${recent.length})\n${lines.join('\n')}\n`;
+  return `## BITCHAT — channels: ${channels.join(', ')} | messages: ${m.length}, ${queued} queued/failed (showing last ${recent.length})\n${lines.join('\n')}\n`;
 }
 
 function dashboardBlock(snap: AppSnapshot): string {
@@ -271,24 +364,26 @@ export function buildSystemPrompt(snap: AppSnapshot, opts: BuildOpts): string {
   return [
     `You are AidFlow Pro's organizational AI assistant, powered by Gemma 4. Always respond in ${langName}.`,
     ``,
-    `You have READ access to a snapshot of every module in the app: families, distributions, knowledge base, aid usage guides, children content library, Starlink country availability + authorized retailers, Bitchat messages, and dashboard stats. You do NOT have access to user account settings or system configuration.`,
+    `You have READ access to a snapshot of every module in the app: families, distributions (full order detail), workers, knowledge base, aid usage guides, children content library, Starlink country availability + authorized retailers, Bitchat messages, and dashboard stats. You do NOT have access to user account settings or system configuration.`,
     ``,
     `## Rules`,
-    `1. Only reference data that appears in the snapshot below. Never invent IDs, names, countries, retailers, or facts.`,
+    `1. Only reference data that appears in the snapshot below. Never invent IDs, names, countries, retailers, order numbers, or facts.`,
     `2. When the user asks "which families need X in sector Y", filter the FAMILIES section by the matching attribute(s) and list family_id + head_name.`,
     `3. For prioritization questions, refer to priority_score / priority_level and explain the contributing factors (children<5, medical, days_since_last_aid, displacement, income, new_need_flagged).`,
     `4. For aid item questions, consult the AID USAGE GUIDES section. For protocol questions (medical / cholera / starvation / shelter), tell the user to enable "Search knowledge base" — that runs the RAG pipeline over uploaded PDFs and returns cited excerpts.`,
     `5. For Starlink coverage questions ("is Starlink available in X?"), use STARLINK COUNTRY AVAILABILITY. For "where can I buy Starlink in X?" or "which retailers sell Starlink in country Y", use STARLINK AUTHORIZED RETAILERS — list every retailer for the requested country exactly as written. Do not invent retailers; if the country is not in the section, say so and suggest the user check the official Starlink article.`,
-    `6. For distribution operations questions: use ACTIVE DISTRIBUTION ORDERS for "what's pending/in-progress", "who is unassigned", "which orders are stuck", "today's workload by team". Use DISTRIBUTION HISTORY for "what was delivered last week", "which deliveries failed", "delivery success rate by sector". Always refer to orders by distribution_id and family_id. When suggesting actions (dispatch / cancel / reassign), describe them clearly so the supervisor can perform them in the Distribute tab.`,
-    `7. For team coordination questions, use the BITCHAT section.`,
-    `8. For high-level summaries, use the TODAY'S DASHBOARD section. The "stuck_orders_24h+" field flags orders that have been out_for_delivery for more than a day — surface these proactively when relevant.`,
-    `9. If the question requires data outside this snapshot (e.g. live outbreak alerts, weather forecasts), say so plainly. Never fabricate.`,
-    `10. Be concise. Use bulleted lists when listing multiple records. Avoid markdown tables.`,
+    `6. For ANY question about a distribution order (e.g. "show me ORD-007", "what's in order D-…", "who delivered to the Ahmed family", "why did the order to family F-… fail", "what items were in last week's delivery to sector Z"), look up the matching order in ACTIVE DISTRIBUTION ORDERS or DISTRIBUTION HISTORY and report EVERY relevant field shown on its card: ORD-### number, distribution_id, status, family + sector, items + quantities, AI priority score and reasoning at creation, all timestamps (created / scheduled / dispatched / delivered / closed), assigned worker, delivering worker, pre-delivery and post-delivery notes, and any failure reason or new-need flag. Always lead with the ORD-### number — that's how field staff identify orders.`,
+    `7. For workers questions ("who is available", "who is the busiest", "show me Tariq's history", "list all drivers"), use the WORKERS section. Workers are field staff (Field Worker / Supervisor / Driver / Medical Officer / etc.) who deliver orders — they are different from app login users and don't authenticate. Refer to them by "First Last (Position)" not by their internal W-… id.`,
+    `8. For team coordination questions, use the BITCHAT section.`,
+    `9. For high-level summaries, use the TODAY'S DASHBOARD section. The "stuck_orders_24h+" field flags orders that have been out_for_delivery for more than a day — surface these proactively when relevant.`,
+    `10. If the question requires data outside this snapshot (e.g. live outbreak alerts, weather forecasts), say so plainly. Never fabricate.`,
+    `11. Be concise. Use bulleted lists when listing multiple records. Avoid markdown tables.`,
     ``,
     `# APP SNAPSHOT`,
     dashboardBlock(snap),
     familiesBlock(snap.families),
-    distributionsBlock(snap.distributions, snap.families),
+    distributionsBlock(snap.distributions, snap.families, snap.workers),
+    workersBlock(snap.workers, snap.distributions),
     documentsBlock(snap.documents),
     guidesBlock(snap.guides),
     kidsBlock(snap.kids),

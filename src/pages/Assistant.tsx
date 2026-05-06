@@ -4,6 +4,7 @@ import {
   Sparkles,
   Database,
   Users,
+  UserCircle,
   Package,
   BookOpen,
   HelpCircle,
@@ -28,6 +29,7 @@ export default function Assistant() {
   // and the system prompt is rebuilt automatically.
   const families = useLiveQuery(() => db.families.toArray()) ?? [];
   const distributions = useLiveQuery(() => db.distributions.toArray()) ?? [];
+  const workers = useLiveQuery(() => db.workers.toArray()) ?? [];
   const documents = useLiveQuery(() => db.documents.toArray()) ?? [];
   const guides = useLiveQuery(() => db.guides.toArray()) ?? [];
   const kids = useLiveQuery(() => db.kids.toArray()) ?? [];
@@ -37,15 +39,16 @@ export default function Assistant() {
   const systemPrompt = useMemo(
     () =>
       buildSystemPrompt(
-        { families, distributions, documents, guides, kids, resellers, messages },
+        { families, distributions, workers, documents, guides, kids, resellers, messages },
         { language }
       ),
-    [families, distributions, documents, guides, kids, resellers, messages, language]
+    [families, distributions, workers, documents, guides, kids, resellers, messages, language]
   );
 
   const dataChips: { icon: React.ReactNode; label: string; count: number }[] = [
     { icon: <Users size={11} />, label: 'families', count: families.length },
     { icon: <Package size={11} />, label: 'distributions', count: distributions.length },
+    { icon: <UserCircle size={11} />, label: 'workers', count: workers.length },
     { icon: <BookOpen size={11} />, label: 'PDFs', count: documents.length },
     { icon: <HelpCircle size={11} />, label: 'guides', count: guides.length },
     { icon: <Smile size={11} />, label: 'kids', count: kids.length },
@@ -100,6 +103,9 @@ export default function Assistant() {
           </Card>
           <Card title="Try asking">
             <ul className="text-xs text-slate-300 space-y-1.5 list-disc list-inside">
+              <li>Show me everything about ORD-001.</li>
+              <li>Which active orders are unassigned right now?</li>
+              <li>Who is the busiest field worker this week?</li>
               <li>List all critical-priority families with pregnant members.</li>
               <li>Is Starlink available in Yemen?</li>
               <li>Which retailers sell Starlink in Kenya?</li>

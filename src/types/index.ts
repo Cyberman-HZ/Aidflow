@@ -50,6 +50,8 @@ export type DistributionStatus =
 
 export interface AidDistribution {
   distribution_id: string;
+  /** Short, human-friendly sequential number (e.g. 1, 2, 3 …). Display as ORD-001 etc. */
+  order_number?: number;
   family_id: string;
   session_id: string;
   status: DistributionStatus;
@@ -175,16 +177,93 @@ export interface User {
   language: 'en' | 'ar' | 'fr' | 'es';
 }
 
+// Field workers / drivers / supervisors / etc. who deliver aid in the field.
+// Workers do NOT need to log in — they are referenced by distribution orders
+// (AidDistribution.assigned_to / delivered_by) and managed via the /workers page.
+export type WorkerPosition =
+  | 'Field Worker'
+  | 'Supervisor'
+  | 'Driver'
+  | 'Medical Officer'
+  | 'Coordinator'
+  | 'Logistics'
+  | 'Translator'
+  | 'Volunteer'
+  | 'Other';
+
+export interface Worker {
+  /** Internal id (auto-generated, e.g. "W-1", "W-2"). Hidden from the user. */
+  id: string;
+  first_name: string;
+  last_name: string;
+  position: WorkerPosition | string;
+  phone?: string;
+  notes?: string;
+  created_at: string;
+  /** Optional link back to a User row if this worker also has login credentials. */
+  user_id?: string;
+}
+
+// Bitchat message lifecycle:
+//   queued    — created locally, not yet attempted
+//   sending   — currently being written to BLE peer / Nostr relay
+//   sent      — handed off to transport (no end-to-end ack yet)
+//   delivered — recipient acknowledged receipt (per Bitchat deliveryAck)
+//   failed    — transport rejected the message (writeValue error, peer drop, etc.)
+//   expired   — TTL hit zero before delivery
+export type BitchatMessageStatus =
+  | 'queued'
+  | 'sending'
+  | 'sent'
+  | 'delivered'
+  | 'failed'
+  | 'expired';
+
 export interface BitchatMessage {
   msg_id: string;
   channel: string;
   author: string;
+  /** 64-bit sender_id from the Bitchat packet header, hex-encoded */
+  author_id?: string;
   body: string;
   sent_at: string;
-  delivered_via: 'bluetooth' | 'nostr' | 'queued';
+  status: BitchatMessageStatus;
+  /** Remaining hops at the time of last update (per Bitchat 8-bit TTL). */
+  ttl?: number;
+  /** Which transport actually carried the bytes. 'local' = saved locally only. */
+  delivered_via: 'bluetooth' | 'nostr' | 'queued' | 'local';
+  failure_reason?: string;
+  /** ISO timestamp of last delivery attempt */
+  last_attempt_at?: string;
+  /** Number of attempts so far */
+  attempts?: number;
+  /** Optional Ed25519 signature, base64-encoded (per Bitchat optional sig field) */
+  signature?: string;
+  /** Recipient sender_id; absent ⇒ broadcast (Bitchat treats 0xFF…FF as broadcast). */
+  recipient_id?: string;
 }
 
 export type ConnectivityState = 'online' | 'local' | 'disconnected';
+
+// An APK / IPA file (or a download manifest) cached in IndexedDB so field
+// teams can install Bitchat or other companion apps offline. Uploaded once by
+// an org admin; downloadable by anyone connected to the same AidFlow instance.
+export interface BitchatApk {
+  id: string;                  // 'bitchat-android' | 'bitchat-ios-manifest' | etc.
+  app: 'bitchat-android' | 'bitchat-ios';
+  filename: string;
+  version: string;             // semver string from the release tag
+  size_bytes: number;
+  mime: string;                // 'application/vnd.android.package-archive' for APKs
+  uploaded_at: string;         // ISO timestamp
+  uploaded_by: string;         // user_id
+  notes?: string;
+  // The actual file bytes. Dexie supports storing Blob directly via structured clone.
+  data: Blob;
+  // Optional release info captured at upload time
+  release_url?: string;
+  release_notes?: string;
+}
 
 // Continents used to group authorized resellers in the UI.
 // Matches the categorization on the official Starlink retailers article:

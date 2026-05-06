@@ -2,9 +2,10 @@
 // Combines the live KPIs/recent-distributions view with the historical charts,
 // CSV export, and AI executive summary that used to live on /reports.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
+import { useLiveQuery } from 'dexie-react-hooks';
 import {
   Users,
   Package,
@@ -14,6 +15,8 @@ import {
   Activity,
   Download,
   BarChart3,
+  RefreshCw,
+  WifiOff,
 } from 'lucide-react';
 import {
   PieChart,
@@ -37,8 +40,7 @@ import { db } from '@/db/database';
 import { useConnectivityStore } from '@/stores/connectivityStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { computeRuleScore } from '@/services/priorityRules';
-import { chat } from '@/services/ollama';
-import type { Family, AidDistribution } from '@/types';
+import { chatStream, pingOllama } from '@/services/ollama';
 
 const PRIORITY_COLORS = {
   CRITICAL: '#ef4444',
@@ -52,19 +54,16 @@ export default function Dashboard() {
   const conn = useConnectivityStore();
   const language = useSettingsStore((s) => s.language);
 
-  const [families, setFamilies] = useState<Family[]>([]);
-  const [distributions, setDistributions] = useState<AidDistribution[]>([]);
-  const [summary, setSummary] = useState('');
-  const [generating, setGenerating] = useState(false);
+  // Live queries — react to any DB change so the dashboard always reflects
+  // current state (and the AI summary, when generated, uses the latest data).
+  const families = useLiveQuery(() => db.families.toArray(), []) ?? [];
+  const distributions = useLiveQuery(() => db.distributions.toArray(), []) ?? [];
+  const workers = useLiveQuery(() => db.workers.toArray(), []) ?? [];
 
-  useEffect(() => {
-    void Promise.all([db.families.toArray(), db.distributions.toArray()]).then(
-      ([fams, dists]) => {
-        setFamilies(fams);
-        setDistributions(dists);
-      }
-    );
-  }, []);
+  const [summary, setSummary] = useState('');
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [summarySource, setSummarySource] = useState<'ai' | 'rules' | null>(null);
+  const [generating, setGenerating] = useState(false);
 
   // ---- Derived data --------------------------------------------------------
   const today = new Date().toISOString().slice(0, 10);
@@ -176,42 +175,245 @@ export default function Dashboard() {
     URL.revokeObjectURL(url);
   };
 
+  // ---- AI executive summary ----------------------------------------------
+  //
+  // Builds a rich snapshot of the operation (counts + named sectors + top
+  // critical families + recent failures + worker workload) and asks Gemma 4
+  // to produce a director-friendly brief. Streams the response so the user
+  // sees text appear progressively instead of staring at a blank card for
+  // 30+ seconds.
+  //
+  // If Ollama is unreachable we fall back to a deterministic rule-based
+  // summary built from the same snapshot — the button is never silently
+  // broken.
+
+  const buildSummaryPayload = () => {
+    const familyMap = new Map(families.map((f) => [f.family_id, f]));
+    const workerMap = new Map(workers.map((w) => [w.id, w]));
+
+    // Per-sector aggregates
+    const sectorStats = new Map<
+      string,
+      { families: number; critical: number; deliveries: number; pending: number; out_for_delivery: number; failed: number }
+    >();
+    for (const f of families) {
+      const s = f.location_sector;
+      const cur = sectorStats.get(s) ?? { families: 0, critical: 0, deliveries: 0, pending: 0, out_for_delivery: 0, failed: 0 };
+      cur.families++;
+      const score = f.priority_score ?? computeRuleScore(f).priority_score;
+      if (score >= 80) cur.critical++;
+      sectorStats.set(s, cur);
+    }
+    for (const d of distributions) {
+      const sector = familyMap.get(d.family_id)?.location_sector;
+      if (!sector) continue;
+      const cur = sectorStats.get(sector);
+      if (!cur) continue;
+      if (d.status === 'delivered') cur.deliveries++;
+      else if (d.status === 'pending') cur.pending++;
+      else if (d.status === 'out_for_delivery') cur.out_for_delivery++;
+      else if (d.status === 'failed') cur.failed++;
+    }
+
+    // Top 5 critical families with reason summary
+    const topCritical = [...families]
+      .map((f) => {
+        const score = f.priority_score ?? computeRuleScore(f).priority_score;
+        const reason = f.ai_reason ?? computeRuleScore(f).reason;
+        const days = f.last_aid_at
+          ? Math.floor((Date.now() - new Date(f.last_aid_at).getTime()) / 86_400_000)
+          : null;
+        return { family_id: f.family_id, head_name: f.head_name, sector: f.location_sector, score, reason, days_since_last_aid: days, new_need_flagged: !!f.new_need_flagged };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+
+    // Recent failed/cancelled deliveries
+    const recentIssues = distributions
+      .filter((d) => d.status === 'failed' || d.status === 'cancelled')
+      .sort((a, b) => (b.closed_at ?? b.created_at).localeCompare(a.closed_at ?? a.created_at))
+      .slice(0, 5)
+      .map((d) => ({
+        order: d.order_number ?? d.distribution_id,
+        family: familyMap.get(d.family_id)?.head_name ?? d.family_id,
+        sector: familyMap.get(d.family_id)?.location_sector ?? '',
+        status: d.status,
+        reason: d.failure_reason ?? '',
+      }));
+
+    // Stuck orders (out_for_delivery > 24h)
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const stuckOrders = distributions
+      .filter((d) => d.status === 'out_for_delivery' && d.dispatched_at && new Date(d.dispatched_at).getTime() < cutoff)
+      .map((d) => ({
+        order: d.order_number ?? d.distribution_id,
+        family: familyMap.get(d.family_id)?.head_name ?? d.family_id,
+        sector: familyMap.get(d.family_id)?.location_sector ?? '',
+        worker: d.assigned_to ? workerMap.get(d.assigned_to) ?? null : null,
+        dispatched_at: d.dispatched_at,
+      }));
+
+    // Worker workload (active orders per worker)
+    const workerLoad = workers
+      .map((w) => {
+        const active = distributions.filter(
+          (d) => (d.assigned_to === w.id) && (d.status === 'pending' || d.status === 'out_for_delivery')
+        ).length;
+        return { name: `${w.first_name} ${w.last_name}`, position: w.position, active };
+      })
+      .sort((a, b) => b.active - a.active);
+
+    return {
+      generated_at: new Date().toISOString(),
+      totals: {
+        families: families.length,
+        critical_priority: criticalCount,
+        new_needs_flagged: families.filter((f) => f.new_need_flagged).length,
+        deliveries_today: todayDistros.length,
+        items_delivered_today: totalItemsToday,
+        active_orders: activeOrders,
+        pending_orders: distributions.filter((d) => d.status === 'pending').length,
+        out_for_delivery_orders: distributions.filter((d) => d.status === 'out_for_delivery').length,
+        delivered_lifetime: distributions.filter((d) => d.status === 'delivered').length,
+        failed_lifetime: distributions.filter((d) => d.status === 'failed').length,
+        stuck_24h: stuckOrders.length,
+        sectors_active: sectorStats.size,
+        workers_total: workers.length,
+      },
+      sectors: Array.from(sectorStats.entries())
+        .map(([sector, s]) => ({ sector, ...s }))
+        .sort((a, b) => b.critical - a.critical),
+      top_critical_families: topCritical,
+      stuck_orders: stuckOrders,
+      recent_failures_or_cancellations: recentIssues,
+      worker_workload: workerLoad,
+    };
+  };
+
+  // Deterministic, no-AI fallback. Always works offline.
+  const ruleBasedSummary = (payload: ReturnType<typeof buildSummaryPayload>) => {
+    const t = payload.totals;
+    const lines: string[] = [];
+    lines.push(`# Operations brief — ${new Date().toLocaleDateString()}`);
+    lines.push('');
+    lines.push('## Impact');
+    lines.push(
+      `- ${t.deliveries_today} delivery${t.deliveries_today === 1 ? '' : 'ies'} confirmed today (${t.items_delivered_today} item${t.items_delivered_today === 1 ? '' : 's'} total).`
+    );
+    lines.push(
+      `- ${t.delivered_lifetime} lifetime deliveries across ${t.sectors_active} sector${t.sectors_active === 1 ? '' : 's'}; ${t.failed_lifetime} failed.`
+    );
+    lines.push(`- ${t.families} families tracked, ${t.workers_total} workers on roster.`);
+    lines.push('');
+    lines.push('## Gaps');
+    if (t.critical_priority > 0)
+      lines.push(`- ${t.critical_priority} families currently sit at CRITICAL priority and need attention.`);
+    if (t.new_needs_flagged > 0)
+      lines.push(`- ${t.new_needs_flagged} family${t.new_needs_flagged === 1 ? '' : 'ies'} flagged with a new urgent need on the last visit.`);
+    if (t.stuck_24h > 0)
+      lines.push(`- ${t.stuck_24h} order${t.stuck_24h === 1 ? '' : 's'} stuck in out-for-delivery for over 24h — investigate or reassign.`);
+    if (payload.recent_failures_or_cancellations.length > 0) {
+      lines.push(
+        `- Recent failures/cancellations: ${payload.recent_failures_or_cancellations
+          .map((r) => `ORD-${r.order} (${r.family}${r.reason ? ` — ${r.reason}` : ''})`)
+          .join('; ')}.`
+      );
+    }
+    if (lines[lines.length - 1] === '## Gaps') lines.push('- No major operational gaps detected.');
+    lines.push('');
+    lines.push('## Top critical families');
+    for (const f of payload.top_critical_families) {
+      const days = f.days_since_last_aid === null ? 'never' : `${f.days_since_last_aid}d ago`;
+      lines.push(`- **${f.head_name}** (${f.family_id}, ${f.sector}) — score ${f.score}, last aid ${days}. ${f.reason}`);
+    }
+    lines.push('');
+    lines.push('## Recommended next actions');
+    if (t.pending_orders > 0) lines.push(`- Dispatch the ${t.pending_orders} pending order${t.pending_orders === 1 ? '' : 's'}.`);
+    if (t.stuck_24h > 0) lines.push(`- Reach out on the ${t.stuck_24h} stuck order${t.stuck_24h === 1 ? '' : 's'} — confirm delivery or mark failed.`);
+    if (t.critical_priority > 0)
+      lines.push(`- Prioritise the ${t.critical_priority} CRITICAL famil${t.critical_priority === 1 ? 'y' : 'ies'} listed above for the next distribution session.`);
+    if (payload.worker_workload[0]?.active >= 2)
+      lines.push(`- Workload is concentrated on ${payload.worker_workload[0].name} (${payload.worker_workload[0].active} active) — consider rebalancing.`);
+    if (lines[lines.length - 1] === '## Recommended next actions') lines.push('- Operations are steady; continue current cadence.');
+    return lines.join('\n');
+  };
+
   const generateSummary = async () => {
     if (generating) return;
     setGenerating(true);
     setSummary('');
+    setSummaryError(null);
+    setSummarySource(null);
+
+    const payload = buildSummaryPayload();
+
+    // Probe Ollama first so we can fall back gracefully.
+    const reachable = await pingOllama();
+    if (!reachable) {
+      setSummary(ruleBasedSummary(payload));
+      setSummarySource('rules');
+      setSummaryError('Ollama is not reachable at localhost:11434 — showing a rule-based summary instead. Start Ollama (with `OLLAMA_ORIGINS=*`) and click again for the AI version.');
+      setGenerating(false);
+      return;
+    }
+
+    const langName =
+      language === 'ar'
+        ? 'Arabic'
+        : language === 'fr'
+        ? 'French'
+        : language === 'es'
+        ? 'Spanish'
+        : 'English';
+
+    const systemPrompt = [
+      `You are AidFlow Pro's reporting AI, powered by Gemma 4. Always respond in ${langName}.`,
+      ``,
+      `You will receive a JSON snapshot of a humanitarian aid operation. Produce an executive brief for the operations director with these exact sections (use markdown headings):`,
+      ``,
+      `## Impact`,
+      `- 2-3 bullets on what was delivered (today vs lifetime), how many families are tracked, sector coverage.`,
+      ``,
+      `## Gaps & risks`,
+      `- 2-4 bullets on critical families, new-need flags, stuck orders, recent failures. Cite specific family heads / sectors / order numbers from the data.`,
+      ``,
+      `## Top critical cases`,
+      `- For each of the top critical families in the JSON, ONE bullet: family head (family_id, sector) — priority score, days since last aid, why they're critical.`,
+      ``,
+      `## Recommended actions`,
+      `- 3-5 specific, actionable next steps (e.g. "dispatch ORD-014 to F-0042 today", "rebalance Tariq's 3 active orders").`,
+      ``,
+      `Rules:`,
+      `1. Only reference data that appears in the JSON. Never invent IDs, names, sectors, or numbers.`,
+      `2. Be concise. Hard cap: ~250 words total.`,
+      `3. Use bullets. No tables. No code fences.`,
+      `4. If a section has no relevant data, say "Nothing to flag this period."`,
+    ].join('\n');
+
     try {
-      const langName =
-        language === 'ar'
-          ? 'Arabic'
-          : language === 'fr'
-          ? 'French'
-          : language === 'es'
-          ? 'Spanish'
-          : 'English';
-      const stats = {
-        families: families.length,
-        distributions_total: distributions.length,
-        distributions_today: todayDistros.length,
-        critical_priority: criticalCount,
-        sectors_active: new Set(
-          distributions.map((d) => families.find((f) => f.family_id === d.family_id)?.location_sector)
-        ).size,
-        new_needs_flagged: families.filter((f) => f.new_need_flagged).length,
-      };
-      const text = await chat(
+      let acc = '';
+      for await (const delta of chatStream(
         [
-          {
-            role: 'system',
-            content: `You are AidFlow Pro's reporting AI. Produce a concise executive summary (3 short paragraphs) highlighting impact, gaps, and recommended next actions for a humanitarian operations director. Use clear markdown headings and bullets where helpful. Respond in ${langName}.`,
-          },
-          { role: 'user', content: JSON.stringify(stats) },
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: JSON.stringify(payload, null, 2) },
         ],
-        { temperature: 0.4, maxTokens: 600 }
-      );
-      setSummary(text);
-    } catch {
-      setSummary('Could not reach AidFlow Assistant. Verify Ollama is running.');
+        { temperature: 0.3, maxTokens: 700 }
+      )) {
+        acc += delta;
+        setSummary(acc);
+      }
+      if (!acc.trim()) {
+        setSummary(ruleBasedSummary(payload));
+        setSummarySource('rules');
+        setSummaryError('Gemma 4 returned an empty response — showing a rule-based summary instead.');
+      } else {
+        setSummarySource('ai');
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setSummary(ruleBasedSummary(payload));
+      setSummarySource('rules');
+      setSummaryError(`Gemma 4 request failed: ${msg}. Showing a rule-based summary instead.`);
     } finally {
       setGenerating(false);
     }
@@ -404,6 +606,16 @@ export default function Dashboard() {
         title={
           <div className="flex items-center gap-2">
             <Sparkles size={14} className="text-ai" /> AI Executive Summary
+            {summarySource === 'ai' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-ai/15 text-ai font-semibold">
+                Gemma 4
+              </span>
+            )}
+            {summarySource === 'rules' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-priority-medium/15 text-priority-medium font-semibold flex items-center gap-1">
+                <WifiOff size={10} /> Rule-based fallback
+              </span>
+            )}
           </div>
         }
         action={
@@ -412,13 +624,31 @@ export default function Dashboard() {
             disabled={generating}
             className="touch-target px-3 py-1.5 bg-ai hover:bg-violet-600 disabled:opacity-50 rounded-lg text-xs flex items-center gap-1 font-semibold"
           >
-            {generating ? <Loading /> : <Sparkles size={12} />}
-            {t('reports.summary')}
+            {generating ? (
+              <Loading />
+            ) : summary ? (
+              <RefreshCw size={12} />
+            ) : (
+              <Sparkles size={12} />
+            )}
+            {generating
+              ? 'Generating…'
+              : summary
+              ? 'Regenerate'
+              : t('reports.summary')}
           </button>
         }
       >
+        {summaryError && (
+          <div className="mb-3 text-xs px-3 py-2 rounded-lg bg-priority-medium/10 border border-priority-medium/30 text-priority-medium flex items-start gap-2">
+            <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+            <span>{summaryError}</span>
+          </div>
+        )}
         {summary ? (
-          <p className="text-sm text-slate-200 whitespace-pre-wrap">{summary}</p>
+          <div className="text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">{summary}</div>
+        ) : generating ? (
+          <p className="text-sm text-slate-500 italic">Asking Gemma 4 to draft the executive brief…</p>
         ) : (
           <p className="text-sm text-slate-500">{t('reports.summary_placeholder')}</p>
         )}

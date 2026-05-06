@@ -17,6 +17,7 @@ import Dashboard from './pages/Dashboard';
 import Families from './pages/Families';
 import FamilyDetail from './pages/FamilyDetail';
 import Distribute from './pages/Distribute';
+import Workers from './pages/Workers';
 import Assistant from './pages/Assistant';
 import KnowledgeBase from './pages/KnowledgeBase';
 import KidsContent from './pages/KidsContent';
@@ -56,6 +57,7 @@ export default function App() {
         <Route path="/families" element={<Families />} />
         <Route path="/families/:id" element={<FamilyDetail />} />
         <Route path="/distribute" element={<Distribute />} />
+        <Route path="/workers" element={<Workers />} />
         <Route path="/docs" element={<KnowledgeBase />} />
         <Route path="/kids" element={<KidsContent />} />
         <Route path="/map" element={<StarlinkMap />} />

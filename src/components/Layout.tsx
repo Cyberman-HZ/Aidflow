@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import {
   LayoutDashboard,
   Users,
+  UserCircle,
   PackageCheck,
   Sparkles,
   BookOpen,
@@ -37,6 +38,7 @@ export default function Layout() {
     { to: '/dashboard', label: t('nav.dashboard'), icon: LayoutDashboard },
     { to: '/families', label: t('nav.families'), icon: Users },
     { to: '/distribute', label: t('nav.distribute'), icon: PackageCheck },
+    { to: '/workers', label: t('nav.workers'), icon: UserCircle },
     { to: '/docs', label: t('nav.knowledge'), icon: BookOpen },
     { to: '/kids', label: t('nav.kids'), icon: Smile },
     { to: '/map', label: t('nav.map'), icon: MapIcon },

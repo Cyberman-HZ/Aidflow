@@ -1,123 +1,102 @@
-// AidFlow Pro — Bitchat / Web Bluetooth wrapper.
+// AidFlow Pro — Bitchat companion-app distribution.
 //
-// The full Bitchat binary protocol (Noise + multi-hop relay) is beyond scope
-// for this hackathon submission, but this module:
-//   1. Detects whether Web Bluetooth is available in the browser.
-//   2. Lets the user scan for nearby Bitchat-capable devices (BLE GATT).
-//   3. Provides a local message queue persisted in IndexedDB so messages
-//      survive offline windows and reload.
-//   4. Exposes a stub `send()` that, in a follow-up, will encode the
-//      Bitchat packet format and write it to the GATT characteristic.
+// We do NOT implement Bitchat in the browser (Web Bluetooth's Central-only
+// role makes that fundamentally impossible — see the documented limitations
+// in the project README). Instead, AidFlow Pro hosts the official native
+// Bitchat installers so field teams can install the real apps offline.
 //
-// Per PDF Section 8: when internet is available, an unsent message can be
-// gift-wrapped to Nostr relays as a fallback. The hook here is `flushQueue()`.
+// Admins upload the latest .apk (Android) once while online. The file is
+// stored as a Blob in IndexedDB on the org's AidFlow instance and any team
+// member connected to that instance — even fully offline — can download it
+// and sideload it onto their phone.
+//
+// iOS distribution requires Apple's TestFlight or an enterprise certificate;
+// we cannot host the IPA directly, so the iOS section just records the
+// public TestFlight invite URL for offline reference.
 
 import { db } from '@/db/database';
-import type { BitchatMessage } from '@/types';
+import type { BitchatApk } from '@/types';
 
-const BITCHAT_SERVICE_UUID = 'F47B5E2D-4A9E-4C5A-9B3F-6E7D8C9A0B1C'; // illustrative
-const BITCHAT_CHAR_UUID = 'A1B2C3D4-E5F6-7890-ABCD-EF1234567890';
+export const OFFICIAL_LINKS = {
+  repo: 'https://github.com/permissionlesstech/bitchat',
+  whitepaper: 'https://github.com/permissionlesstech/bitchat/blob/main/WHITEPAPER.md',
+  androidRepo: 'https://github.com/permissionlesstech/bitchat-android',
+  androidReleases: 'https://github.com/permissionlesstech/bitchat-android/releases/latest',
+  androidPlayStore: 'https://play.google.com/store/apps/details?id=com.bitchat.android',
+  bitchatHomepage: 'https://bitchat.free',
+};
 
-export interface BitchatTransportStatus {
-  webBluetoothSupported: boolean;
-  bluetoothAvailable: boolean;
-  connectedDevice: string | null;
-  online: boolean;
+// ---------------------------------------------------------------------
+// Admin upload
+// ---------------------------------------------------------------------
+
+export interface UploadOptions {
+  app: BitchatApk['app'];
+  version: string;
+  uploaded_by: string;
+  notes?: string;
+  release_url?: string;
 }
 
-export async function getStatus(): Promise<BitchatTransportStatus> {
-  const supported = typeof navigator !== 'undefined' && 'bluetooth' in navigator;
-  let available = false;
-  if (supported) {
-    try {
-      // @ts-ignore — getAvailability is non-standard but widely shipped
-      available = await (navigator as any).bluetooth.getAvailability?.();
-    } catch {
-      available = false;
-    }
+export async function uploadApk(file: File, opts: UploadOptions): Promise<BitchatApk> {
+  if (file.size === 0) throw new Error('Empty file');
+  if (file.size > 200 * 1024 * 1024) {
+    throw new Error('File too large (max 200 MB) — Bitchat APKs are typically 5–20 MB');
   }
-  return {
-    webBluetoothSupported: supported,
-    bluetoothAvailable: available,
-    connectedDevice: connectedDeviceName,
-    online: typeof navigator !== 'undefined' && navigator.onLine,
+  const record: BitchatApk = {
+    id: opts.app, // singleton per app — replaces previous version
+    app: opts.app,
+    filename: file.name,
+    version: opts.version.trim() || 'unknown',
+    size_bytes: file.size,
+    mime: file.type || 'application/vnd.android.package-archive',
+    uploaded_at: new Date().toISOString(),
+    uploaded_by: opts.uploaded_by,
+    notes: opts.notes,
+    data: file,
+    release_url: opts.release_url,
   };
+  await db.bitchatApks.put(record);
+  return record;
 }
 
-let connectedDeviceName: string | null = null;
-let gattCharacteristic: any = null;
+// ---------------------------------------------------------------------
+// Read
+// ---------------------------------------------------------------------
 
-export async function scanAndConnect(): Promise<{ name: string }> {
-  if (!('bluetooth' in navigator)) {
-    throw new Error('Web Bluetooth not supported in this browser. Use Chrome or Edge.');
-  }
-  // @ts-ignore
-  const device = await navigator.bluetooth.requestDevice({
-    acceptAllDevices: true,
-    optionalServices: [BITCHAT_SERVICE_UUID],
-  });
-  connectedDeviceName = device.name ?? device.id ?? 'Unknown device';
-  try {
-    const server = await device.gatt?.connect();
-    const service = await server?.getPrimaryService(BITCHAT_SERVICE_UUID);
-    gattCharacteristic = await service?.getCharacteristic(BITCHAT_CHAR_UUID);
-  } catch {
-    // The device may not advertise the Bitchat service (most won't yet) —
-    // we still report a successful scan so the UI can demonstrate pairing.
-  }
-  return { name: connectedDeviceName };
+export async function getApkInfo(app: BitchatApk['app']): Promise<Omit<BitchatApk, 'data'> | null> {
+  const row = await db.bitchatApks.get(app);
+  if (!row) return null;
+  // Strip the blob from the returned info — callers asking for metadata
+  // only shouldn't pull tens of megabytes into memory.
+  const { data: _data, ...meta } = row;
+  return meta;
 }
 
-export function disconnect(): void {
-  connectedDeviceName = null;
-  gattCharacteristic = null;
+export async function downloadApk(app: BitchatApk['app']): Promise<void> {
+  const row = await db.bitchatApks.get(app);
+  if (!row) throw new Error('No APK uploaded yet — ask your administrator to upload it.');
+  const url = URL.createObjectURL(row.data);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = row.filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoke after a short delay so the download has time to start
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-// ---------- Local store: channels & messages -----------------------------
-
-export async function listMessages(channel: string): Promise<BitchatMessage[]> {
-  return db.messages.where('channel').equals(channel).sortBy('sent_at');
+export async function deleteApk(app: BitchatApk['app']): Promise<void> {
+  await db.bitchatApks.delete(app);
 }
 
-export async function listChannels(): Promise<string[]> {
-  const all = await db.messages.toArray();
-  return Array.from(new Set(all.map((m) => m.channel))).sort();
-}
+// ---------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------
 
-export async function send(
-  channel: string,
-  author: string,
-  body: string
-): Promise<BitchatMessage> {
-  const online = navigator.onLine;
-  const hasBT = !!gattCharacteristic;
-  const message: BitchatMessage = {
-    msg_id: `M-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    channel,
-    author,
-    body,
-    sent_at: new Date().toISOString(),
-    delivered_via: hasBT ? 'bluetooth' : online ? 'nostr' : 'queued',
-  };
-
-  // Best-effort GATT write — silent failure is OK; we keep the message locally
-  if (hasBT) {
-    try {
-      const encoded = new TextEncoder().encode(JSON.stringify(message));
-      await gattCharacteristic.writeValue(encoded);
-    } catch (e) {
-      console.warn('[bitchat] GATT write failed; queued locally', e);
-      message.delivered_via = 'queued';
-    }
-  }
-
-  await db.messages.add(message);
-  return message;
-}
-
-export async function flushQueue(): Promise<number> {
-  // Placeholder: in production this would forward queued messages to a
-  // connected GATT peer or a Nostr relay (NIP-17 gift-wrap).
-  const queued = await db.messages.where('delivered_via').equals('queued').count();
-  return queued;
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }

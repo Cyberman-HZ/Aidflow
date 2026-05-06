@@ -7,6 +7,7 @@ import type {
   AidDistribution,
   StarlinkProvider,
   User,
+  Worker,
   KidsContent,
   AidGuide,
   BitchatMessage,
@@ -184,6 +185,7 @@ const distributions: AidDistribution[] = [
   // Two completed distributions
   {
     distribution_id: 'D-0001',
+    order_number: 1,
     family_id: 'F-0042',
     session_id: 'S-2026-04-15',
     status: 'delivered',
@@ -193,11 +195,11 @@ const distributions: AidDistribution[] = [
     ],
     created_at: daysAgo(19),
     created_by: 'U-supervisor-1',
-    assigned_to: 'U-fieldworker-1',
+    assigned_to: 'W-fieldworker-1',
     dispatched_at: daysAgo(18),
     delivered_at: daysAgo(18),
-    delivered_by: 'U-fieldworker-1',
-    distributed_by: 'U-fieldworker-1',
+    delivered_by: 'W-fieldworker-1',
+    distributed_by: 'W-fieldworker-1',
     distributed_at: daysAgo(18),
     ai_priority_score: 91,
     ai_reasoning: '3 children under 5, pregnant mother, recently displaced.',
@@ -206,6 +208,7 @@ const distributions: AidDistribution[] = [
   },
   {
     distribution_id: 'D-0002',
+    order_number: 2,
     family_id: 'F-0089',
     session_id: 'S-2026-04-22',
     status: 'delivered',
@@ -215,11 +218,11 @@ const distributions: AidDistribution[] = [
     ],
     created_at: daysAgo(10),
     created_by: 'U-supervisor-1',
-    assigned_to: 'U-fieldworker-2',
+    assigned_to: 'W-fieldworker-2',
     dispatched_at: daysAgo(9),
     delivered_at: daysAgo(9),
-    delivered_by: 'U-fieldworker-2',
-    distributed_by: 'U-fieldworker-2',
+    delivered_by: 'W-fieldworker-2',
+    distributed_by: 'W-fieldworker-2',
     distributed_at: daysAgo(9),
     ai_priority_score: 67,
     ai_reasoning: '2 elderly, critical diabetes case, 9 days without aid.',
@@ -229,6 +232,7 @@ const distributions: AidDistribution[] = [
   // Active orders demonstrating the lifecycle
   {
     distribution_id: 'D-0003',
+    order_number: 3,
     family_id: 'F-0201',
     session_id: 'S-2026-05-04',
     status: 'out_for_delivery',
@@ -239,7 +243,7 @@ const distributions: AidDistribution[] = [
     ],
     created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
     created_by: 'U-supervisor-1',
-    assigned_to: 'U-fieldworker-1',
+    assigned_to: 'W-fieldworker-1',
     dispatched_at: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
     ai_priority_score: 100,
     ai_reasoning: 'Suspected cholera, 2 children under 5, recently displaced — urgent.',
@@ -247,6 +251,7 @@ const distributions: AidDistribution[] = [
   },
   {
     distribution_id: 'D-0004',
+    order_number: 4,
     family_id: 'F-0301',
     session_id: 'S-2026-05-04',
     status: 'pending',
@@ -263,6 +268,7 @@ const distributions: AidDistribution[] = [
   },
   {
     distribution_id: 'D-0005',
+    order_number: 5,
     family_id: 'F-0123',
     session_id: 'S-2026-05-04',
     status: 'pending',
@@ -291,6 +297,53 @@ const users: User[] = [
   { user_id: 'U-fieldworker-1', name: 'Pierre Lefevre', role: 'field_worker', pin: '3456', language: 'fr' },
   { user_id: 'U-fieldworker-2', name: 'Carmen Diaz', role: 'field_worker', pin: '4567', language: 'es' },
   { user_id: 'U-data-1', name: 'Amir Patel', role: 'data_manager', pin: '5678', language: 'en' },
+];
+
+// Workers — field deployment roster. Distribution orders point at worker IDs.
+// The two field-worker users above also exist as workers (linked via user_id)
+// so admins/supervisors who log in are still bookable for deliveries.
+const workers: Worker[] = [
+  {
+    id: 'W-fieldworker-1',
+    first_name: 'Pierre',
+    last_name: 'Lefevre',
+    position: 'Field Worker',
+    user_id: 'U-fieldworker-1',
+    created_at: now(),
+  },
+  {
+    id: 'W-fieldworker-2',
+    first_name: 'Carmen',
+    last_name: 'Diaz',
+    position: 'Field Worker',
+    user_id: 'U-fieldworker-2',
+    created_at: now(),
+  },
+  {
+    id: 'W-supervisor-1',
+    first_name: 'Karim',
+    last_name: 'Al-Maliki',
+    position: 'Supervisor',
+    user_id: 'U-supervisor-1',
+    created_at: now(),
+  },
+  {
+    id: 'W-driver-1',
+    first_name: 'Tariq',
+    last_name: 'Hassan',
+    position: 'Driver',
+    phone: '+963-94-555-0011',
+    notes: 'Owns 4×4 — preferred for unpaved sectors.',
+    created_at: now(),
+  },
+  {
+    id: 'W-medic-1',
+    first_name: 'Layla',
+    last_name: 'Othman',
+    position: 'Medical Officer',
+    notes: 'Trained for cholera response.',
+    created_at: now(),
+  },
 ];
 
 const kids: KidsContent[] = [
@@ -384,27 +437,65 @@ const guides: AidGuide[] = [
 ];
 
 const messages: BitchatMessage[] = [
-  { msg_id: 'M-001', channel: '#sector-b-north', author: 'Pierre Lefevre', body: 'Distribution complete at site 4. 12 families served.', sent_at: daysAgo(0), delivered_via: 'bluetooth' },
-  { msg_id: 'M-002', channel: '#sector-b-north', author: 'Sarah Chen', body: 'Acknowledged. Move to site 5 next.', sent_at: daysAgo(0), delivered_via: 'bluetooth' },
-  { msg_id: 'M-003', channel: '#medical-team', author: 'Carmen Diaz', body: 'Suspected cholera at F-0201. Need rehydration kits.', sent_at: daysAgo(0), delivered_via: 'queued' },
+  {
+    msg_id: 'M-001',
+    channel: '#sector-b-north',
+    author: 'Pierre Lefevre',
+    author_id: '01a2b3c4d5e6f701',
+    body: 'Distribution complete at site 4. 12 families served.',
+    sent_at: daysAgo(0),
+    status: 'delivered',
+    delivered_via: 'bluetooth',
+    ttl: 6,
+    attempts: 1,
+  },
+  {
+    msg_id: 'M-002',
+    channel: '#sector-b-north',
+    author: 'Sarah Chen',
+    author_id: '01a2b3c4d5e6f702',
+    body: 'Acknowledged. Move to site 5 next.',
+    sent_at: daysAgo(0),
+    status: 'delivered',
+    delivered_via: 'bluetooth',
+    ttl: 7,
+    attempts: 1,
+  },
+  {
+    msg_id: 'M-003',
+    channel: '#medical-team',
+    author: 'Carmen Diaz',
+    author_id: '01a2b3c4d5e6f703',
+    body: 'Suspected cholera at F-0201. Need rehydration kits.',
+    sent_at: daysAgo(0),
+    status: 'queued',
+    delivered_via: 'queued',
+    ttl: 7,
+    attempts: 0,
+    failure_reason: 'no peer connected',
+  },
 ];
 
 export async function seedIfEmpty(): Promise<void> {
   if (await isSeeded()) return;
   await db.transaction(
     'rw',
-    db.families,
-    db.distributions,
-    db.providers,
-    db.users,
-    db.kids,
-    db.guides,
-    db.messages,
+    [
+      db.families,
+      db.distributions,
+      db.providers,
+      db.users,
+      db.workers,
+      db.kids,
+      db.guides,
+      db.messages,
+    ],
     async () => {
       await db.families.bulkAdd(families);
       await db.distributions.bulkAdd(distributions);
       await db.providers.bulkAdd(providers);
       await db.users.bulkAdd(users);
+      await db.workers.bulkAdd(workers);
       await db.kids.bulkAdd(kids);
       await db.guides.bulkAdd(guides);
       await db.messages.bulkAdd(messages);
@@ -437,19 +528,23 @@ export async function cleanupLegacyDemoProviders(): Promise<void> {
 export async function reseed(): Promise<void> {
   await db.transaction(
     'rw',
-    db.families,
-    db.distributions,
-    db.providers,
-    db.users,
-    db.kids,
-    db.guides,
-    db.messages,
+    [
+      db.families,
+      db.distributions,
+      db.providers,
+      db.users,
+      db.workers,
+      db.kids,
+      db.guides,
+      db.messages,
+    ],
     async () => {
       await Promise.all([
         db.families.clear(),
         db.distributions.clear(),
         db.providers.clear(),
         db.users.clear(),
+        db.workers.clear(),
         db.kids.clear(),
         db.guides.clear(),
         db.messages.clear(),
