@@ -167,3 +167,15 @@ html[dir='rtl'] body {
   outline-offset: 2px;
   border-radius: 4px;
 }
+
+/* Hide the native datalist dropdown indicator on text inputs that have a
+   `list=` attribute. The default chevron looks out of place on our dark
+   theme and makes users think the field is read-only / select-only. */
+input[list]::-webkit-calendar-picker-indicator {
+  display: none !important;
+  opacity: 0;
+}
+input[list]::-webkit-list-button {
+  display: none !important;
+  opacity: 0;
+}

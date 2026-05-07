@@ -22,13 +22,13 @@ import PriorityBadge from '@/components/PriorityBadge';
 import StatusBadge from '@/components/StatusBadge';
 import EmptyState from '@/components/EmptyState';
 import AIChat from '@/components/AIChat';
-import FamilyEditModal from '@/components/FamilyEditModal';
+import EditableDemographicsCard from '@/components/EditableDemographicsCard';
+import EditableMedicalCard from '@/components/EditableMedicalCard';
 import type { AidDistribution, Family, NeededItem } from '@/types';
 
 export default function FamilyDetail() {
   const { id } = useParams();
   const { t } = useTranslation();
-  const [editing, setEditing] = useState(false);
 
   const family = useLiveQuery(
     () => (id ? db.families.get(id) : undefined),
@@ -100,78 +100,14 @@ export default function FamilyDetail() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={() => setEditing(true)}
-            className="touch-target px-3 py-2 bg-surface-light hover:bg-brand hover:text-white border border-slate-700 hover:border-brand rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
-          >
-            <Edit2 size={14} /> {t('family_detail.edit')}
-          </button>
           <PriorityBadge level={level} score={score} size="lg" />
         </div>
       </header>
 
+      <>
       <div className="grid lg:grid-cols-3 gap-5">
-        <Card title={t('family_detail.demographics')} className="lg:col-span-1">
-          <dl className="space-y-3 text-sm">
-            <Row icon={<Users size={14} />} label={t('families.members')} value={family.member_count} />
-            <Row icon={<Baby size={14} />} label={t('families.children_under5')} value={family.children_under_5} />
-            <Row icon={<Heart size={14} />} label={t('families.elderly')} value={family.elderly_count} />
-            {family.has_pregnant_member && (
-              <Row icon={<Heart size={14} />} label={t('families.pregnant')} value="Yes" />
-            )}
-            <Row label={t('family_detail.displacement')} value={family.displacement_status} />
-            <Row label={t('family_detail.income')} value={family.income_level} />
-            {family.street && (
-              <Row icon={<MapPin size={14} />} label={t('families_edit.street')} value={family.street} />
-            )}
-            {family.city && (
-              <Row icon={<MapPin size={14} />} label={t('families_edit.city')} value={family.city} />
-            )}
-          </dl>
-        </Card>
-
-        <Card title={t('family_detail.medical')} className="lg:col-span-2">
-          {family.medical_conditions.length === 0 ? (
-            <p className="text-sm text-slate-400">No medical conditions on record.</p>
-          ) : (
-            <ul className="text-sm space-y-1.5">
-              {family.medical_conditions.map((c, i) => (
-                <li
-                  key={i}
-                  className={`px-3 py-2 rounded-lg border ${
-                    c.toLowerCase().includes('critical')
-                      ? 'bg-priority-critical/10 border-priority-critical/30 text-priority-critical'
-                      : 'bg-surface-light border-slate-700'
-                  }`}
-                >
-                  {c}
-                </li>
-              ))}
-            </ul>
-          )}
-          {family.last_medical_notes && (
-            <div className="mt-4 pt-4 border-t border-slate-700">
-              <div className="text-xs text-slate-400 mb-1 font-medium flex items-center gap-1">
-                <Heart size={11} /> Last medical notes (from latest delivery)
-              </div>
-              <p className="text-sm text-slate-200 italic">{family.last_medical_notes}</p>
-            </div>
-          )}
-          {family.last_delivery_notes && (
-            <div className="mt-4 pt-4 border-t border-slate-700">
-              <div className="text-xs text-slate-400 mb-1 font-medium">
-                Last delivery notes
-              </div>
-              <p className="text-sm text-slate-200 italic">{family.last_delivery_notes}</p>
-            </div>
-          )}
-          {family.notes && (
-            <div className="mt-4 pt-4 border-t border-slate-700">
-              <div className="text-xs text-slate-400 mb-1 font-medium">Field notes</div>
-              <p className="text-sm text-slate-200">{family.notes}</p>
-            </div>
-          )}
-        </Card>
+        <EditableDemographicsCard family={family} />
+        <EditableMedicalCard family={family} />
       </div>
 
       <CurrentNeedsCard family={family} fallbackItems={recommended} />
@@ -255,12 +191,7 @@ Be concise. Reference the family's specific situation. When the user asks for a 
         </div>
       </div>
 
-      {editing && (
-        <FamilyEditModal
-          existing={family}
-          onClose={() => setEditing(false)}
-        />
-      )}
+      </>
     </div>
   );
 }
@@ -289,6 +220,8 @@ function CurrentNeedsCard({
   const [draftName, setDraftName] = useState('');
   const [draftQty, setDraftQty] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [qtyError, setQtyError] = useState<string | null>(null);
 
   const startEdit = () => {
     setDraft(items.map((i) => ({ ...i })));
@@ -299,11 +232,18 @@ function CurrentNeedsCard({
 
   const addDraftItem = () => {
     const name = draftName.trim();
+    if (!name) {
+      setQtyError('Item name is required');
+      return;
+    }
+    if (!Number.isFinite(draftQty) || draftQty < 1) {
+      setQtyError('Quantity must be 1 or more');
+      return;
+    }
+    setQtyError(null);
     const qty = Math.max(1, Math.floor(draftQty));
-    if (!name) return;
     const idx = draft.findIndex((x) => x.name.toLowerCase() === name.toLowerCase());
     if (idx >= 0) {
-      // Bump quantity rather than add a duplicate
       setDraft((arr) =>
         arr.map((it, i) => (i === idx ? { ...it, quantity: it.quantity + qty } : it))
       );
@@ -315,21 +255,42 @@ function CurrentNeedsCard({
   };
   const removeDraftItem = (i: number) =>
     setDraft((arr) => arr.filter((_, idx) => idx !== i));
-  const updateDraftQty = (i: number, qty: number) =>
+  const updateDraftQty = (i: number, qty: number) => {
+    if (!Number.isFinite(qty) || qty < 1) {
+      setQtyError('Quantity must be 1 or more — clamped to 1');
+    } else {
+      setQtyError(null);
+    }
     setDraft((arr) =>
       arr.map((it, idx) =>
-        idx === i ? { ...it, quantity: Math.max(1, Math.floor(qty)) } : it
+        idx === i ? { ...it, quantity: Math.max(1, Math.floor(qty || 1)) } : it
       )
     );
+  };
 
   const save = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
       await db.families.update(family.family_id, {
         recommended_items: draft,
         last_updated: new Date().toISOString(),
       });
       setEditing(false);
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      // Map common Dexie / IndexedDB errors to user-friendly messages.
+      let friendly: string;
+      if (/QuotaExceeded/i.test(raw)) {
+        friendly = 'Could not save — your device is out of storage. Free up some space and try again.';
+      } else if (/InvalidState|Aborted|NotFound/i.test(raw)) {
+        friendly = 'Could not save — the database is in an unexpected state. Try refreshing the page.';
+      } else {
+        friendly = `Could not save the changes. ${raw}`;
+      }
+      setSaveError(friendly);
+      // eslint-disable-next-line no-console
+      console.error('[CurrentNeedsCard] save failed', e);
     } finally {
       setSaving(false);
     }
@@ -410,12 +371,22 @@ function CurrentNeedsCard({
             />
             <button
               onClick={addDraftItem}
-              disabled={!draftName.trim()}
-              className="touch-target px-3 py-2 bg-surface-light hover:bg-slate-600 disabled:opacity-40 rounded-lg text-xs flex items-center justify-center gap-1"
+              disabled={!draftName.trim() || !Number.isFinite(draftQty) || draftQty < 1}
+              className="touch-target px-3 py-2 bg-surface-light hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-xs flex items-center justify-center gap-1"
             >
               + {t('distribute.add_item')}
             </button>
           </div>
+          {qtyError && (
+            <div className="text-[11px] text-amber-400 italic" role="alert">
+              ⚠ {qtyError}
+            </div>
+          )}
+          {saveError && (
+            <div className="text-xs text-priority-critical bg-priority-critical/10 border border-priority-critical/30 rounded-lg px-3 py-2" role="alert">
+              {saveError}
+            </div>
+          )}
           <div className="flex gap-2 pt-1 border-t border-slate-700">
             <button
               onClick={() => void save()}

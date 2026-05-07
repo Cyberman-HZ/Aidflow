@@ -26,19 +26,45 @@ const STRIPPABLE = /^(please |kindly |can you |could you |would you |i want to |
  * Find a canonical item name from the family's current needs by case-insensitive
  * substring matching. Returns the actual stored name (preserving casing) or null.
  */
+/**
+ * Find an item from the family's needs by case-insensitive matching with
+ * clear precedence:
+ *   1. Exact match (case-insensitive)
+ *   2. Token-boundary match — query equals one of the words in the item name
+ *      e.g. "infant" matches an item NAMED "infant" but does NOT match an
+ *      item named "infant formula" via this rule
+ *   3. Substring match — preferring the SHORTEST candidate (closest in length
+ *      to the query), so "infant" → "infant" wins over "infant formula"
+ */
 function findItem(family: Family, query: string): NeededItem | null {
   const items = family.recommended_items ?? [];
   const q = query.toLowerCase().trim();
   if (!q) return null;
-  // Exact (case-insensitive) match wins
+
+  // Pass 1: exact case-insensitive match
   const exact = items.find((i) => i.name.toLowerCase() === q);
   if (exact) return exact;
-  // Then most-specific substring match (longest match preferred)
+
+  // Pass 2: token-boundary match — split each item name on whitespace and
+  // check if any token equals the query exactly. This gives "infant" precise
+  // priority over "infant formula" when the user said just "infant".
+  const tokenMatch = items.find((i) =>
+    i.name
+      .toLowerCase()
+      .split(/[\s/.\-_]+/)
+      .includes(q)
+  );
+  if (tokenMatch) return tokenMatch;
+
+  // Pass 3: substring match — prefer the SHORTEST candidate (closest in
+  // length to the query). This way the user typing a partial item name gets
+  // the most specific match, not the longest one that happens to contain it.
   const subs = items
     .filter(
-      (i) => i.name.toLowerCase().includes(q) || q.includes(i.name.toLowerCase())
+      (i) =>
+        i.name.toLowerCase().includes(q) || q.includes(i.name.toLowerCase())
     )
-    .sort((a, b) => b.name.length - a.name.length);
+    .sort((a, b) => a.name.length - b.name.length);
   return subs[0] ?? null;
 }
 

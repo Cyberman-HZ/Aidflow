@@ -220,8 +220,23 @@ function tryParseAction(raw: string): FamilyAction | null {
   }
 }
 
+export interface ParseResult {
+  actions: FamilyAction[];
+  /**
+   * Number of fenced or inline candidates that failed validation.
+   * The UI can surface this so the user knows the AI tried to propose a
+   * change but it was malformed (vs. silently dropping it).
+   */
+  failedCandidates: number;
+}
+
 export function parseFamilyActions(text: string): FamilyAction[] {
+  return parseFamilyActionsDetailed(text).actions;
+}
+
+export function parseFamilyActionsDetailed(text: string): ParseResult {
   const out: FamilyAction[] = [];
+  let failed = 0;
 
   // 1) Fenced code blocks (preferred path)
   ACTION_BLOCK_RE.lastIndex = 0;
@@ -229,18 +244,23 @@ export function parseFamilyActions(text: string): FamilyAction[] {
   while ((match = ACTION_BLOCK_RE.exec(text))) {
     const tag = (match[1] || "").toLowerCase();
     if (tag && tag !== "aidflow-action" && tag !== "json" && tag !== "") continue;
+    const raw = match[2].trim();
+    // Only count as a candidate if it looks like an attempt at our schema.
+    const looksLikeAction = /"type"\s*:\s*"[a-z_]+"/.test(raw);
     const action = tryParseAction(match[2]);
     if (action) out.push(action);
+    else if (looksLikeAction) failed++;
   }
-  if (out.length > 0) return out;
+  if (out.length > 0) return { actions: out, failedCandidates: failed };
 
   // 2) Fallback: inline {"type":...} JSON the AI dropped without a fence.
   INLINE_ACTION_RE.lastIndex = 0;
   while ((match = INLINE_ACTION_RE.exec(text))) {
     const action = tryParseAction(match[0]);
     if (action) out.push(action);
+    else failed++;
   }
-  return out;
+  return { actions: out, failedCandidates: failed };
 }
 
 /**

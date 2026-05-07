@@ -1015,24 +1015,28 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
           <div className="space-y-2">
             {items.map((it, i) => (
               <div key={i} className="flex gap-2 items-center">
-                <select
+                <input
+                  type="text"
                   value={it.item_name}
                   onChange={(e) => {
-                    const tmpl = ITEM_TEMPLATES.find((tt) => tt.name === e.target.value);
+                    const v = e.target.value;
+                    const tmpl = ITEM_TEMPLATES.find(
+                      (tt) => tt.name.toLowerCase() === v.toLowerCase()
+                    );
                     updateItem(i, {
-                      item_name: e.target.value,
-                      category: tmpl?.category ?? it.category,
+                      item_name: v,
+                      category: tmpl?.category ?? (v.trim() ? it.category : 'general'),
                     });
                   }}
+                  list="aid-items-wizard"
+                  placeholder={t('distribute.add_item') ?? 'Item name'}
                   className="flex-1 bg-surface-deep border border-slate-700 rounded-lg px-2 py-2 text-sm touch-target"
-                >
-                  <option value="">— {t('distribute.add_item')} —</option>
+                />
+                <datalist id="aid-items-wizard">
                   {ITEM_TEMPLATES.map((tmpl) => (
-                    <option key={tmpl.name} value={tmpl.name}>
-                      {tmpl.name}
-                    </option>
+                    <option key={tmpl.name} value={tmpl.name} />
                   ))}
-                </select>
+                </datalist>
                 <input
                   type="number"
                   min={1}
@@ -1456,28 +1460,28 @@ function EditPanel({
         <div className="space-y-1.5">
           {items.map((it, i) => (
             <div key={i} className="flex gap-1.5 items-center">
-              <select
+              <input
+                type="text"
                 value={it.item_name}
                 onChange={(e) => {
-                  const tmpl = ITEM_TEMPLATES.find((tt) => tt.name === e.target.value);
+                  const v = e.target.value;
+                  const tmpl = ITEM_TEMPLATES.find(
+                    (tt) => tt.name.toLowerCase() === v.toLowerCase()
+                  );
                   updateItem(i, {
-                    item_name: e.target.value,
-                    category: tmpl?.category ?? it.category,
+                    item_name: v,
+                    category: tmpl?.category ?? (v.trim() ? it.category : 'general'),
                   });
                 }}
+                list="aid-items-edit"
+                placeholder={t('distribute.add_item') ?? 'Item name'}
                 className="flex-1 bg-surface-deep border border-slate-700 rounded px-2 py-1.5 text-xs"
-              >
-                <option value="">— {t('distribute.add_item')} —</option>
+              />
+              <datalist id="aid-items-edit">
                 {ITEM_TEMPLATES.map((tmpl) => (
-                  <option key={tmpl.name} value={tmpl.name}>
-                    {tmpl.name}
-                  </option>
+                  <option key={tmpl.name} value={tmpl.name} />
                 ))}
-                {/* Preserve any custom item that's not in the template list */}
-                {it.item_name && !ITEM_TEMPLATES.some((tt) => tt.name === it.item_name) && (
-                  <option value={it.item_name}>{it.item_name}</option>
-                )}
-              </select>
+              </datalist>
               <input
                 type="number"
                 min={1}
@@ -1662,28 +1666,28 @@ function DeliveryConfirmModal({
             <div className="space-y-1.5">
               {items.map((it, i) => (
                 <div key={i} className="flex gap-1.5 items-center">
-                  <select
+                  <input
+                    type="text"
                     value={it.item_name}
                     onChange={(e) => {
-                      const tmpl = ITEM_TEMPLATES.find((tt) => tt.name === e.target.value);
+                      const v = e.target.value;
+                      const tmpl = ITEM_TEMPLATES.find(
+                        (tt) => tt.name.toLowerCase() === v.toLowerCase()
+                      );
                       updateItem(i, {
-                        item_name: e.target.value,
-                        category: tmpl?.category ?? it.category,
+                        item_name: v,
+                        category: tmpl?.category ?? (v.trim() ? it.category : 'general'),
                       });
                     }}
+                    list="aid-items-next"
+                    placeholder={t('distribute.add_item') ?? 'Item name'}
                     className="flex-1 bg-surface-deep border border-slate-700 rounded px-2 py-2 text-sm"
-                  >
-                    <option value="">— {t('distribute.add_item')} —</option>
+                  />
+                  <datalist id="aid-items-next">
                     {ITEM_TEMPLATES.map((tmpl) => (
-                      <option key={tmpl.name} value={tmpl.name}>
-                        {tmpl.name}
-                      </option>
+                      <option key={tmpl.name} value={tmpl.name} />
                     ))}
-                    {it.item_name &&
-                      !ITEM_TEMPLATES.some((tt) => tt.name === it.item_name) && (
-                        <option value={it.item_name}>{it.item_name}</option>
-                      )}
-                  </select>
+                  </datalist>
                   <input
                     type="number"
                     min={1}

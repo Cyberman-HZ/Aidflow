@@ -74,9 +74,17 @@ function newFamilyId(): string {
 export default function FamilyEditModal({
   existing,
   onClose,
+  inline = false,
 }: {
   existing?: Family;
   onClose: () => void;
+  /**
+   * When true, render the form as a regular page section instead of a
+   * fixed-position modal overlay. Used by the family detail page so the
+   * "Edit profile" experience swaps the read-only cards for the form
+   * inline (no popup card-on-top-of-card).
+   */
+  inline?: boolean;
 }) {
   const { t } = useTranslation();
   const isEditing = !!existing;
@@ -216,18 +224,18 @@ export default function FamilyEditModal({
     }
   };
 
-  return (
+  // When inline === true, render the same form body without the fixed
+  // overlay wrapper — it becomes a regular section in the parent page.
+  // When false (default), it's the original modal overlay.
+  const formBody = (
     <div
-      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="family-edit-title"
-      onClick={onClose}
+      className={
+        inline
+          ? 'w-full bg-surface border border-brand/40 rounded-xl shadow-lg flex flex-col'
+          : 'w-full max-w-2xl bg-surface border border-brand/40 rounded-xl shadow-2xl flex flex-col max-h-[90vh]'
+      }
+      onClick={inline ? undefined : (e) => e.stopPropagation()}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl bg-surface border border-brand/40 rounded-xl shadow-2xl flex flex-col max-h-[90vh]"
-      >
         <header className="px-5 py-3 border-b border-slate-700 flex items-start justify-between gap-3">
           <div>
             <h2
@@ -540,6 +548,22 @@ export default function FamilyEditModal({
           </div>
         </footer>
       </div>
+  );
+
+  // Inline mode: render the form body directly. Modal mode: wrap in a
+  // fixed-position overlay so it appears as a centered dialog.
+  if (inline) {
+    return formBody;
+  }
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="family-edit-title"
+      onClick={onClose}
+    >
+      {formBody}
     </div>
   );
 }

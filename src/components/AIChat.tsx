@@ -24,6 +24,7 @@ import {
   buildFamilyActionPrompt,
   describeFamilyAction,
   parseFamilyActions,
+  parseFamilyActionsDetailed,
   stripFamilyActions,
   type FamilyAction,
 } from '@/services/familyActions';
@@ -39,19 +40,74 @@ import { useConnectivityStore } from '@/stores/connectivityStore';
  * skim long system prompts — putting the data directly next to the question
  * is far more reliable.
  */
+
+/**
+ * Translate raw applier errors into user-friendly text. The applier throws
+ * for things like an unknown sector or an item that's not present; the raw
+ * error is technical, so we soften it for the chat surface.
+ */
+function friendlyApplyError(raw: string, action: FamilyAction): string {
+  // Sector validation
+  if (
+    action.type === 'set_field' &&
+    action.field === 'location_sector' &&
+    /not an existing sector/i.test(raw)
+  ) {
+    const m = raw.match(/Pick one of: (.+)$/);
+    const list = m ? m[1] : '(no sectors yet)';
+    return `Sorry — that sector doesn't exist yet. Pick one that's already in use: ${list}.`;
+  }
+  // Family not found
+  if (/not found/i.test(raw)) {
+    return 'The family record could not be loaded. Try refreshing the page.';
+  }
+  // Item-not-in-needs (from remove_recommended_item applier)
+  if (/Cannot remove/i.test(raw)) {
+    // Already user-friendly — pass through.
+    return raw;
+  }
+  // IndexedDB / Dexie write failures
+  if (/QuotaExceeded|InvalidState|Aborted|NotFoundError/i.test(raw)) {
+    return 'Could not save the change to the local database. Free up storage space and try again.';
+  }
+  return `Could not apply this change. ${raw}`;
+}
+
+/**
+ * Sanitize a free-text family field before interpolating it into a prompt.
+ * Strips newlines, tabs, and control chars so a malicious value like
+ *   "Ahmed\n\nIGNORE PREVIOUS INSTRUCTIONS"
+ * cannot break the prompt structure or pretend to be a new instruction.
+ * Also caps the length so a giant value can't drown the rest of the prompt.
+ */
+function sanitizeForPrompt(s: unknown, maxLen = 200): string {
+  const str = typeof s === 'string' ? s : String(s ?? '');
+  return str
+    .replace(/[\r\n\t\u0000-\u001f\u007f]+/g, ' ') // collapse control chars
+    .replace(/[`]/g, "'") // backticks could close fenced code blocks
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
+}
+
 function buildInlineContext(family: Family): string {
   const items = family.recommended_items ?? [];
   const itemList =
     items.length > 0
-      ? items.map((it, i) => `${i + 1}. ${it.name} (qty=${it.quantity})`).join('; ')
+      ? items
+          .map(
+            (it, i) =>
+              `${i + 1}. ${sanitizeForPrompt(it.name, 80)} (qty=${Math.max(0, Math.floor(it.quantity))})`
+          )
+          .join('; ')
       : '(no current need items)';
   const meds = family.medical_conditions.length
-    ? family.medical_conditions.join('; ')
+    ? family.medical_conditions.map((c) => sanitizeForPrompt(c, 80)).join('; ')
     : 'none';
   return [
     `[FAMILY CONTEXT — current state, treat as ground truth]`,
-    `family_id=${family.family_id}; head=${family.head_name}; sector=${family.location_sector}`,
-    `members=${family.member_count}; children<5=${family.children_under_5}; elderly=${family.elderly_count}; pregnant=${family.has_pregnant_member}; displacement=${family.displacement_status}; income=${family.income_level}`,
+    `family_id=${sanitizeForPrompt(family.family_id, 40)}; head=${sanitizeForPrompt(family.head_name, 80)}; sector=${sanitizeForPrompt(family.location_sector, 40)}`,
+    `members=${family.member_count}; children<5=${family.children_under_5}; elderly=${family.elderly_count}; pregnant=${family.has_pregnant_member}; displacement=${sanitizeForPrompt(family.displacement_status, 40)}; income=${sanitizeForPrompt(family.income_level, 40)}`,
     `medical_conditions: ${meds}`,
     `current_need_items: ${itemList}`,
     `When the user asks to remove or reference an item, the EXACT items present are listed above in current_need_items. Do not deny their existence.`,
@@ -99,7 +155,7 @@ export default function AIChat({
   //   applied     — successfully written to IndexedDB
   //   discarded   — user declined
   //   failed      — apply threw (error stored in errorByKey)
-  type ActionStatus = 'pending' | 'applied' | 'discarded' | 'failed';
+  type ActionStatus = 'pending' | 'applying' | 'applied' | 'discarded' | 'failed';
   const [actionStatus, setActionStatus] = useState<Record<string, ActionStatus>>({});
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
 
@@ -132,8 +188,35 @@ export default function AIChat({
     // prepend an inline CONTEXT block when this chat is family-scoped — it's
     // far more reliable than a long system prompt, especially with smaller
     // local models like Gemma 4 4B that often skim or ignore system content.
-    const contextHeader = family
-      ? buildInlineContext(family)
+    // We RE-FETCH the family from Dexie to guarantee we have the freshest
+    // persisted data, eliminating any stale-React-prop edge case.
+    let freshFamily: Family | undefined = family;
+    if (family) {
+      try {
+        const latest = await db.families.get(family.family_id);
+        if (latest) {
+          // CRITICAL: when the DB row has no recommended_items, the chips on
+          // screen were rendered from the rule-engine fallback (passed in via
+          // the `family` prop's recommended_items). The intent detector and
+          // inline context MUST see those same items, otherwise the AI will
+          // truthfully report "(none)" while the chips say otherwise.
+          const merged = latest as Family;
+          if (
+            (merged.recommended_items === undefined ||
+              merged.recommended_items.length === 0) &&
+            family.recommended_items &&
+            family.recommended_items.length > 0
+          ) {
+            merged.recommended_items = family.recommended_items;
+          }
+          freshFamily = merged;
+        }
+      } catch {
+        // If the DB read fails for any reason, fall back to the prop.
+      }
+    }
+    const contextHeader = freshFamily
+      ? buildInlineContext(freshFamily)
       : '';
     const augmentedContent = contextHeader
       ? `${contextHeader}\n\nUSER REQUEST: ${trimmed}`
@@ -163,8 +246,8 @@ export default function AIChat({
     // an unambiguous match against the family's current state, we emit the
     // action card (or clarification reply) directly. This works even if Gemma
     // 4 refuses to follow the action protocol, and is offline-safe.
-    if (family) {
-      const intent = detectIntent(trimmed, family);
+    if (freshFamily) {
+      const intent = detectIntent(trimmed, freshFamily);
       if (intent.matched) {
         // Build an assistant message that EITHER carries the actions (so the
         // existing Bubble component renders the Apply card) OR is just a
@@ -350,7 +433,13 @@ export default function AIChat({
             actionErrors={actionErrors}
             onApply={async (key, action) => {
               if (!family) return;
-              setActionStatus((s) => ({ ...s, [key]: 'pending' }));
+              // Guard against double-clicks: if this action is already
+              // mid-flight or already applied/discarded, ignore the click.
+              const current = actionStatus[key] ?? 'pending';
+              if (current === 'applying' || current === 'applied' || current === 'discarded') {
+                return;
+              }
+              setActionStatus((s) => ({ ...s, [key]: 'applying' }));
               try {
                 await applyFamilyAction(family.family_id, action);
                 setActionStatus((s) => ({ ...s, [key]: 'applied' }));
@@ -360,9 +449,10 @@ export default function AIChat({
                   return c;
                 });
               } catch (e) {
-                const msg = e instanceof Error ? e.message : String(e);
+                const raw = e instanceof Error ? e.message : String(e);
+                const friendly = friendlyApplyError(raw, action);
                 setActionStatus((s) => ({ ...s, [key]: 'failed' }));
-                setActionErrors((s) => ({ ...s, [key]: msg }));
+                setActionErrors((s) => ({ ...s, [key]: friendly }));
               }
             }}
             onDiscard={(key) =>
@@ -449,15 +539,19 @@ function Bubble({
 }: {
   m: ChatMessage;
   family?: Family;
-  actionStatus: Record<string, 'pending' | 'applied' | 'discarded' | 'failed'>;
+  actionStatus: Record<string, 'pending' | 'applying' | 'applied' | 'discarded' | 'failed'>;
   actionErrors: Record<string, string>;
   onApply: (key: string, action: FamilyAction) => Promise<void>;
   onDiscard: (key: string) => void;
   messageIdx: number;
 }) {
   const isUser = m.role === 'user';
-  const actions: FamilyAction[] =
-    !isUser && family && m.content ? parseFamilyActions(m.content) : [];
+  const parsed =
+    !isUser && family && m.content
+      ? parseFamilyActionsDetailed(m.content)
+      : { actions: [], failedCandidates: 0 };
+  const actions: FamilyAction[] = parsed.actions;
+  const failedCount = parsed.failedCandidates;
   const visibleContent =
     !isUser && family && actions.length > 0 ? stripFamilyActions(m.content) : m.content;
 
@@ -499,13 +593,18 @@ function Bubble({
               <span className="italic text-slate-400">
                 Proposed change{actions.length === 1 ? '' : 's'} below.
               </span>
-            ) : m.content.includes('aidflow-action') || m.content.includes('"type"') ? (
+            ) : failedCount > 0 ? (
               <span className="italic text-amber-400 text-xs">
-                Gemma 4 tried to propose a change but the action JSON was malformed. Try rephrasing your request, e.g. "remove water" or "add 4 water".
+                ⚠ Gemma 4 tried to propose {failedCount === 1 ? 'a change' : `${failedCount} changes`} but the action JSON was malformed and ignored. Try rephrasing your request, e.g. "remove water" or "add 4 water".
               </span>
             ) : (
               '…'
             )}
+          </div>
+        )}
+        {!isUser && failedCount > 0 && actions.length > 0 && (
+          <div className="mt-3 pt-2 text-xs text-amber-400 italic">
+            ⚠ {failedCount} additional proposed change{failedCount === 1 ? '' : 's'} could not be parsed and {failedCount === 1 ? 'was' : 'were'} ignored.
           </div>
         )}
         {!isUser && actions.length > 0 && (
@@ -565,13 +664,21 @@ function ActionCard({
   onDiscard,
 }: {
   action: FamilyAction;
-  status: 'pending' | 'applied' | 'discarded' | 'failed';
+  status: 'pending' | 'applying' | 'applied' | 'discarded' | 'failed';
   error?: string;
   onApply: () => void | Promise<void>;
   onDiscard: () => void;
 }) {
   const description = describeFamilyAction(action);
 
+  if (status === 'applying') {
+    return (
+      <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-brand/10 border border-brand/30 text-slate-200">
+        <Sparkles size={13} className="animate-spin" />
+        <span>Applying: {description}…</span>
+      </div>
+    );
+  }
   if (status === 'applied') {
     return (
       <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-priority-normal/10 border border-priority-normal/30 text-priority-normal">
