@@ -27,10 +27,36 @@ import {
   stripFamilyActions,
   type FamilyAction,
 } from '@/services/familyActions';
+import { detectIntent } from '@/services/familyIntent';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useConnectivityStore } from '@/stores/connectivityStore';
+
+/**
+ * Builds a tiny snapshot of the family that we PREPEND to the user's question
+ * so the model can't miss it. Smaller local models like Gemma 4 4B routinely
+ * skim long system prompts — putting the data directly next to the question
+ * is far more reliable.
+ */
+function buildInlineContext(family: Family): string {
+  const items = family.recommended_items ?? [];
+  const itemList =
+    items.length > 0
+      ? items.map((it, i) => `${i + 1}. ${it.name} (qty=${it.quantity})`).join('; ')
+      : '(no current need items)';
+  const meds = family.medical_conditions.length
+    ? family.medical_conditions.join('; ')
+    : 'none';
+  return [
+    `[FAMILY CONTEXT — current state, treat as ground truth]`,
+    `family_id=${family.family_id}; head=${family.head_name}; sector=${family.location_sector}`,
+    `members=${family.member_count}; children<5=${family.children_under_5}; elderly=${family.elderly_count}; pregnant=${family.has_pregnant_member}; displacement=${family.displacement_status}; income=${family.income_level}`,
+    `medical_conditions: ${meds}`,
+    `current_need_items: ${itemList}`,
+    `When the user asks to remove or reference an item, the EXACT items present are listed above in current_need_items. Do not deny their existence.`,
+  ].join('\n');
+}
 
 interface AIChatProps {
   systemPrompt?: string;
@@ -101,10 +127,72 @@ export default function AIChat({
     const trimmed = input.trim();
     if (!trimmed || thinking) return;
     setInput('');
-    const userMsg: ChatMessage = { role: 'user', content: trimmed, timestamp: new Date().toISOString() };
-    const next: ChatMessage[] = [...messages, userMsg];
+
+    // The user sees their plain question in the bubble. But for the model we
+    // prepend an inline CONTEXT block when this chat is family-scoped — it's
+    // far more reliable than a long system prompt, especially with smaller
+    // local models like Gemma 4 4B that often skim or ignore system content.
+    const contextHeader = family
+      ? buildInlineContext(family)
+      : '';
+    const augmentedContent = contextHeader
+      ? `${contextHeader}\n\nUSER REQUEST: ${trimmed}`
+      : trimmed;
+
+    // What the user sees in the bubble — their original wording, not the augment.
+    const userBubble: ChatMessage = {
+      role: 'user',
+      content: trimmed,
+      timestamp: new Date().toISOString(),
+    };
+    // What Gemma 4 actually sees — the augmented one (kept off-screen).
+    const userForModel: ChatMessage = {
+      role: 'user',
+      content: augmentedContent,
+      timestamp: userBubble.timestamp,
+    };
+    const next: ChatMessage[] = [...messages, userBubble];
     setMessages(next);
     setThinking(true);
+    // Replace the last (visible) user message with the augmented one when
+    // building the model conversation.
+    const modelConversation: ChatMessage[] = [...messages, userForModel];
+
+    // ----- DETERMINISTIC INTENT SHORT-CIRCUIT --------------------------------
+    // Before going to the LLM, run a regex-based intent detector. If it gets
+    // an unambiguous match against the family's current state, we emit the
+    // action card (or clarification reply) directly. This works even if Gemma
+    // 4 refuses to follow the action protocol, and is offline-safe.
+    if (family) {
+      const intent = detectIntent(trimmed, family);
+      if (intent.matched) {
+        // Build an assistant message that EITHER carries the actions (so the
+        // existing Bubble component renders the Apply card) OR is just a
+        // clarification reply.
+        const FENCE = '`' + '`' + '`';
+        const actionBlocks =
+          intent.actions.length > 0
+            ? intent.actions
+                .map(
+                  (a) => FENCE + 'aidflow-action\n' + JSON.stringify(a) + '\n' + FENCE
+                )
+                .join('\n\n')
+            : '';
+        const replyContent = actionBlocks
+          ? intent.reply + '\n\n' + actionBlocks
+          : intent.reply;
+        setMessages((m) => [
+          ...m,
+          {
+            role: 'assistant',
+            content: replyContent,
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+        setThinking(false);
+        return;
+      }
+    }
 
     try {
       // ---- Step 1: build any optional augmentations (Wikipedia, RAG) ----
@@ -181,7 +269,11 @@ export default function AIChat({
         const sysContent = baseSys + actionBlock + wikiBlock + wikiInstruction;
 
         const sys: ChatMessage = { role: 'system', content: sysContent };
-        const conversation = [sys, ...next];
+        // Debug: log what we send so the user can verify the family snapshot
+        // is reaching Gemma 4. View in DevTools console (F12).
+        // eslint-disable-next-line no-console
+        console.debug('[AIChat] system prompt →', sysContent);
+        const conversation = [sys, ...modelConversation];
         let buffer = '';
         const placeholderMsg: ChatMessage = {
           role: 'assistant',
@@ -406,6 +498,10 @@ function Bubble({
             ) : actions.length > 0 ? (
               <span className="italic text-slate-400">
                 Proposed change{actions.length === 1 ? '' : 's'} below.
+              </span>
+            ) : m.content.includes('aidflow-action') || m.content.includes('"type"') ? (
+              <span className="italic text-amber-400 text-xs">
+                Gemma 4 tried to propose a change but the action JSON was malformed. Try rephrasing your request, e.g. "remove water" or "add 4 water".
               </span>
             ) : (
               '…'

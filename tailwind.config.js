@@ -5,7 +5,13 @@ export default {
   theme: {
     extend: {
       colors: {
-        // AidFlow Pro design tokens (per PDF Section 12)
+        // AidFlow Pro design tokens.
+        //
+        // Palette inspired by a dark-teal product launch aesthetic: surfaces
+        // are deep, slightly cool near-blacks; the brand accent is a muted
+        // teal-cyan that echoes the cyan glow on tech product hero shots.
+        // Priority colours stay bright/saturated since they signal urgency
+        // and need to remain instantly distinguishable.
         priority: {
           critical: '#ef4444', // red-500   — score 80-100
           high: '#f97316',     // orange-500 — score 60-79
@@ -13,15 +19,15 @@ export default {
           normal: '#22c55e',   // green-500  — score <40
         },
         brand: {
-          DEFAULT: '#0ea5e9', // sky-500
-          dark: '#0369a1',
+          DEFAULT: '#0891b2', // cyan-600 — muted teal-cyan, primary accent
+          dark: '#0e7490',    // cyan-700 — hover / pressed
         },
-        ai: '#8b5cf6',        // violet-500 — Gemma 4 / AI accent
+        ai: '#8b5cf6',        // violet-500 — Gemma 4 / AI accent (kept distinct)
         warn: '#f59e0b',      // amber-500 — offline banner
         surface: {
-          DEFAULT: '#1e293b', // slate-800
-          deep: '#0f172a',    // slate-900
-          light: '#334155',   // slate-700
+          DEFAULT: '#0f1923', // near-black with a cool teal undertone
+          deep: '#070d14',    // page background — almost pure black
+          light: '#1a2632',   // hover / raised panels
         },
       },
       fontFamily: {

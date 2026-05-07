@@ -115,11 +115,6 @@ export class AidFlowDB extends Dexie {
     });
 
     // v7 — Workers table + sequential order_number on distributions.
-    //   * Adds `workers` table indexed on position/last_name/first_name.
-    //   * Migrates field_worker/supervisor users into workers; rewrites
-    //     distributions.assigned_to and .delivered_by to point at the new
-    //     worker IDs.
-    //   * Backfills order_number on existing distributions in created_at order.
     this.version(7)
       .stores({
         workers: 'id, position, last_name, first_name, user_id',
@@ -175,37 +170,59 @@ export class AidFlowDB extends Dexie {
           }
         }
       });
+
+    // v8 — Needed items become objects with a quantity. Earlier rows stored
+    //      family.recommended_items as string[]; we convert each entry to
+    //      { name, quantity: 1 } so the UI's new quantity field has a sane
+    //      default and downstream code can rely on the structured shape.
+    this.version(8).upgrade(async (tx) => {
+      const families = tx.table('families');
+      await families.toCollection().modify((f: any) => {
+        if (!Array.isArray(f.recommended_items)) return;
+        f.recommended_items = f.recommended_items.map((it: any) => {
+          if (it && typeof it === 'object' && typeof it.name === 'string') {
+            const q = Number(it.quantity);
+            return {
+              name: it.name,
+              quantity: Number.isFinite(q) && q > 0 ? Math.floor(q) : 1,
+            };
+          }
+          // Legacy string entry — wrap with a default quantity of 1.
+          return { name: String(it), quantity: 1 };
+        });
+      });
+    });
+  }
+
+  /**
+   * Wipe all user data. Used by the "Reset demo data" admin action so a
+   * field-test session can start from a clean slate without re-creating
+   * the IndexedDB.
+   */
+  async clearAll() {
+    await Promise.all([
+      this.families.clear(),
+      this.distributions.clear(),
+      this.documents.clear(),
+      this.kids.clear(),
+      this.guides.clear(),
+      this.providers.clear(),
+      this.resellers.clear(),
+      this.users.clear(),
+      this.workers.clear(),
+      this.messages.clear(),
+      this.bitchatApks.clear(),
+      this.syncQueue.clear(),
+    ]);
   }
 }
 
 export const db = new AidFlowDB();
 
-// Convenience helpers ------------------------------------------------------
-
-// Tables we mass-clear on a Reset. Listed in one place so adding a new table
-// only requires updating this array.
-const ALL_TABLES = (): Table[] => [
-  db.families,
-  db.distributions,
-  db.documents,
-  db.kids,
-  db.guides,
-  db.providers,
-  db.resellers,
-  db.users,
-  db.workers,
-  db.messages,
-  db.bitchatApks,
-  db.syncQueue,
-];
-
-export async function clearAll() {
-  await db.transaction('rw', ALL_TABLES(), async () => {
-    await Promise.all(ALL_TABLES().map((t) => t.clear()));
-  });
-}
-
+/**
+ * Returns true if seed data has already been loaded (the families table is
+ * non-empty). Used by seedData.ts to avoid duplicating demo rows.
+ */
 export async function isSeeded(): Promise<boolean> {
-  const familyCount = await db.families.count();
-  return familyCount > 0;
+  return (await db.families.count()) > 0;
 }

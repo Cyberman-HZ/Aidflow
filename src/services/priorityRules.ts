@@ -11,6 +11,7 @@
 import type {
   AidDistribution,
   Family,
+  NeededItem,
   PrioritizationResult,
   PriorityLevel,
 } from '@/types';
@@ -22,22 +23,51 @@ function levelFromScore(score: number): PriorityLevel {
   return 'NORMAL';
 }
 
-function recommend(family: Family): string[] {
-  const items: string[] = [];
-  if (family.children_under_5 > 0) items.push('infant formula', 'high-protein rations');
-  if (family.has_pregnant_member) items.push('prenatal supplements');
-  if (family.elderly_count > 0) items.push('soft food kit');
+// Default-quantity recipe per dependent person:
+//   * infant formula scales with children<5
+//   * prenatal supplements: 1 per pregnant member
+//   * soft food kit: 1 per elderly member
+//   * everything else: 1 per family
+function recommend(family: Family): NeededItem[] {
+  const items: NeededItem[] = [];
+  const push = (name: string, quantity = 1) => {
+    if (!items.some((x) => x.name === name)) items.push({ name, quantity });
+  };
+
+  if (family.children_under_5 > 0) {
+    push('infant formula', family.children_under_5);
+    push('high-protein rations', family.children_under_5);
+  }
+  if (family.has_pregnant_member) push('prenatal supplements', 1);
+  if (family.elderly_count > 0) push('soft food kit', family.elderly_count);
   const medsLower = family.medical_conditions.join(' ').toLowerCase();
-  if (medsLower.includes('diabet')) items.push('diabetic-safe rations');
-  if (medsLower.includes('cholera') || medsLower.includes('diarrh'))
-    items.push('oral rehydration salts', 'water purification');
-  if (medsLower.includes('tubercul')) items.push('TB hygiene kit', 'medical referral');
-  if (medsLower.includes('malaria')) items.push('mosquito net', 'antimalarials');
-  if (medsLower.includes('asthma')) items.push('inhaler', 'masks');
-  if (family.displacement_status !== 'resident') items.push('shelter tarp', 'blankets');
-  if (items.length === 0) items.push('family food parcel', 'drinking water');
-  // Dedupe + cap at 4
-  return Array.from(new Set(items)).slice(0, 4);
+  if (medsLower.includes('diabet')) push('diabetic-safe rations');
+  if (medsLower.includes('cholera') || medsLower.includes('diarrh')) {
+    push('oral rehydration salts', 2);
+    push('water purification');
+  }
+  if (medsLower.includes('tubercul')) {
+    push('TB hygiene kit');
+    push('medical referral');
+  }
+  if (medsLower.includes('malaria')) {
+    push('mosquito net', Math.max(1, Math.ceil(family.member_count / 2)));
+    push('antimalarials');
+  }
+  if (medsLower.includes('asthma')) {
+    push('inhaler');
+    push('masks');
+  }
+  if (family.displacement_status !== 'resident') {
+    push('shelter tarp');
+    push('blankets', family.member_count);
+  }
+  if (items.length === 0) {
+    push('family food parcel');
+    push('drinking water', Math.max(1, Math.ceil(family.member_count / 2)));
+  }
+  // Cap at 4 entries
+  return items.slice(0, 4);
 }
 
 /**
@@ -85,7 +115,6 @@ export function computeRuleScore(
   if (days >= 0 && days < 5) {
     // Multiplicative damping so the score visibly drops even for very vulnerable
     // families whose raw score would otherwise saturate at 100. Recovers over 5 days.
-    //   day0 → ×0.5   day1 → ×0.6   day2 → ×0.7   day3 → ×0.8   day4 → ×0.9
     const damping = 0.5 + days * 0.1;
     score = Math.round(score * damping);
     const label =
@@ -158,25 +187,32 @@ export function computeRuleScore(
     if (recentFailed > 0) {
       score += recentFailed * 5;
       reasons.push(
-        `${recentFailed} unsuccessful delivery attempt${recentFailed === 1 ? '' : 's'}`
+        `${recentFailed} failed/cancelled attempt${recentFailed === 1 ? '' : 's'} in last 30 days`
       );
     }
   }
 
-  score = Math.max(0, Math.min(100, Math.round(score)));
+  // Clamp into the 0–100 band that levelFromScore expects.
+  score = Math.max(0, Math.min(100, score));
 
   return {
     family_id: family.family_id,
     priority_score: score,
     priority_level: levelFromScore(score),
-    reason: reasons.length ? reasons.join('; ') + '.' : 'No urgent factors detected.',
+    reason: reasons.join('; '),
     recommended_items: recommend(family),
-    sector: family.location_sector,
   };
 }
 
-export function sortByScore(results: PrioritizationResult[]): PrioritizationResult[] {
-  return [...results].sort((a, b) => b.priority_score - a.priority_score);
+/**
+ * Sort an array of PrioritizationResult by descending priority score (default)
+ * or ascending. Used by the Families list to render the most urgent family
+ * first.
+ */
+export function sortByScore(
+  results: PrioritizationResult[],
+  direction: 'desc' | 'asc' = 'desc'
+): PrioritizationResult[] {
+  const sign = direction === 'asc' ? 1 : -1;
+  return [...results].sort((a, b) => sign * (a.priority_score - b.priority_score));
 }
-
-export { levelFromScore };

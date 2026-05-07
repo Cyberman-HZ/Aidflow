@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
 import {
@@ -23,7 +23,7 @@ import StatusBadge from '@/components/StatusBadge';
 import EmptyState from '@/components/EmptyState';
 import AIChat from '@/components/AIChat';
 import FamilyEditModal from '@/components/FamilyEditModal';
-import type { Family, AidDistribution } from '@/types';
+import type { AidDistribution, Family, NeededItem } from '@/types';
 
 export default function FamilyDetail() {
   const { id } = useParams();
@@ -72,6 +72,15 @@ export default function FamilyDetail() {
   const score = rule.priority_score;
   const level = rule.priority_level;
   const recommended = family.recommended_items ?? rule.recommended_items;
+  // The "effective family" — what the user sees on screen. The chips are
+  // rendered from `recommended` (which may come from the rule engine if the
+  // DB field is undefined). The AI must see THIS exact list, otherwise it
+  // will tell the user "the item isn't in the needs" while the chip is
+  // sitting right there. We pass this synthetic snapshot to AIChat.
+  const familyForAI: Family = {
+    ...family,
+    recommended_items: recommended,
+  };
 
   return (
     <div className="space-y-5">
@@ -221,10 +230,27 @@ export default function FamilyDetail() {
             {t('family_detail.ask_about')}
           </h3>
           <AIChat
-            systemPrompt={`You are AidFlow Pro's AI assistant powered by Gemma 4. You are answering questions about family ${family.family_id} (${family.head_name}). Current family data (use it as the source of truth — do NOT invent fields): ${JSON.stringify(family)}. Be concise, practical, and reference the family's specific situation. When the user asks for a change to this family's record, propose it as an action block (see ACTIONS section below) — never claim a change has already happened.`}
+            systemPrompt={`You are AidFlow Pro's AI assistant for family ${family.family_id} (${family.head_name}).
+
+==========================================================
+🟢 CURRENT NEED ITEMS — THE EXACT LIST (verbatim from the database):
+${
+  family.recommended_items && family.recommended_items.length > 0
+    ? family.recommended_items
+        .map((it, i) => `  ${i + 1}. ${it.name} (quantity: ${it.quantity})`)
+        .join('\n')
+    : '  (this family has no current need items)'
+}
+==========================================================
+
+When the user mentions any item from the list above (case-insensitive substring match), it IS in this family's needs — DO NOT deny it. Use the action block to add/remove/decrement it.
+
+Family demographics: ${family.member_count} members, ${family.children_under_5} children<5, ${family.elderly_count} elderly${family.has_pregnant_member ? ', has pregnant/nursing member' : ''}. Sector: ${family.location_sector}. Displacement: ${family.displacement_status}. Income: ${family.income_level}. Medical: ${family.medical_conditions.length === 0 ? 'none' : family.medical_conditions.join(', ')}.
+
+Be concise. Reference the family's specific situation. When the user asks for a change, propose it as an action block (see ACTIONS section below) — do not claim a change is already done.`}
             contextLabel={`Family ${family.family_id} — ${family.head_name}`}
             placeholder={t('assistant.placeholder')}
-            family={family}
+            family={familyForAI}
           />
         </div>
       </div>
@@ -240,47 +266,61 @@ export default function FamilyDetail() {
 }
 
 // Current-needs card with inline edit support. The "items" are stored on
-// family.recommended_items and surface as "Suggested needs" badges in the
-// distribution wizard's step 3, so editing them here changes what the
-// wizard suggests for this family next time.
+// family.recommended_items as { name, quantity } objects and surface as
+// "Suggested needs" in the distribute wizard's step 3 — editing them here
+// changes what the wizard suggests for this family next time.
 function CurrentNeedsCard({
   family,
   fallbackItems,
 }: {
   family: Family;
-  fallbackItems: string[];
+  fallbackItems: NeededItem[];
 }) {
   const { t } = useTranslation();
   // An explicit empty array means "no current needs" (e.g. the worker just
   // cleared them on delivery) and must be honoured. Only fall back to the
   // rule-engine suggestions when the family has never had items set.
-  const items =
+  const items: NeededItem[] =
     family.recommended_items !== undefined
       ? family.recommended_items
       : fallbackItems;
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<string[]>(items);
-  const [draftInput, setDraftInput] = useState('');
+  const [draft, setDraft] = useState<NeededItem[]>(items);
+  const [draftName, setDraftName] = useState('');
+  const [draftQty, setDraftQty] = useState(1);
   const [saving, setSaving] = useState(false);
 
   const startEdit = () => {
-    setDraft(items);
-    setDraftInput('');
+    setDraft(items.map((i) => ({ ...i })));
+    setDraftName('');
+    setDraftQty(1);
     setEditing(true);
   };
 
   const addDraftItem = () => {
-    const v = draftInput.trim();
-    if (!v) return;
-    if (draft.some((x) => x.toLowerCase() === v.toLowerCase())) {
-      setDraftInput('');
-      return;
+    const name = draftName.trim();
+    const qty = Math.max(1, Math.floor(draftQty));
+    if (!name) return;
+    const idx = draft.findIndex((x) => x.name.toLowerCase() === name.toLowerCase());
+    if (idx >= 0) {
+      // Bump quantity rather than add a duplicate
+      setDraft((arr) =>
+        arr.map((it, i) => (i === idx ? { ...it, quantity: it.quantity + qty } : it))
+      );
+    } else {
+      setDraft((arr) => [...arr, { name, quantity: qty }]);
     }
-    setDraft((arr) => [...arr, v]);
-    setDraftInput('');
+    setDraftName('');
+    setDraftQty(1);
   };
   const removeDraftItem = (i: number) =>
     setDraft((arr) => arr.filter((_, idx) => idx !== i));
+  const updateDraftQty = (i: number, qty: number) =>
+    setDraft((arr) =>
+      arr.map((it, idx) =>
+        idx === i ? { ...it, quantity: Math.max(1, Math.floor(qty)) } : it
+      )
+    );
 
   const save = async () => {
     setSaving(true);
@@ -316,32 +356,41 @@ function CurrentNeedsCard({
     >
       {editing ? (
         <div className="space-y-3">
-          <div className="flex flex-wrap gap-1.5">
-            {draft.map((it, i) => (
-              <span
-                key={i}
-                className="text-xs bg-brand/15 text-brand border border-brand/30 px-2 py-1 rounded-full flex items-center gap-1"
-              >
-                {it}
-                <button
-                  onClick={() => removeDraftItem(i)}
-                  aria-label={`Remove ${it}`}
-                  className="hover:text-white"
+          {draft.length === 0 ? (
+            <span className="text-xs text-slate-500 italic">
+              {t('family_detail.no_needs_yet')}
+            </span>
+          ) : (
+            <ul className="space-y-1.5">
+              {draft.map((it, i) => (
+                <li
+                  key={i}
+                  className="flex items-center gap-2 bg-surface-deep border border-slate-700 rounded-lg px-3 py-1.5"
                 >
-                  <X size={11} />
-                </button>
-              </span>
-            ))}
-            {draft.length === 0 && (
-              <span className="text-xs text-slate-500 italic">
-                {t('family_detail.no_needs_yet')}
-              </span>
-            )}
-          </div>
-          <div className="flex gap-1.5">
+                  <span className="flex-1 text-sm text-slate-100">{it.name}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={it.quantity}
+                    onChange={(e) => updateDraftQty(i, +e.target.value)}
+                    aria-label={`Quantity for ${it.name}`}
+                    className="w-16 bg-surface border border-slate-700 rounded px-2 py-1 text-xs text-center"
+                  />
+                  <button
+                    onClick={() => removeDraftItem(i)}
+                    aria-label={`Remove ${it.name}`}
+                    className="touch-target p-1 hover:bg-red-500/10 hover:text-red-400 rounded"
+                  >
+                    <X size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex flex-col sm:flex-row gap-1.5">
             <input
-              value={draftInput}
-              onChange={(e) => setDraftInput(e.target.value)}
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
@@ -351,10 +400,18 @@ function CurrentNeedsCard({
               placeholder={t('family_detail.add_need_placeholder') ?? ''}
               className="flex-1 bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
             />
+            <input
+              type="number"
+              min={1}
+              value={draftQty}
+              onChange={(e) => setDraftQty(+e.target.value)}
+              aria-label="Quantity"
+              className="w-20 bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm text-center focus:border-brand outline-none"
+            />
             <button
               onClick={addDraftItem}
-              disabled={!draftInput.trim()}
-              className="touch-target px-3 py-2 bg-surface-light hover:bg-slate-600 disabled:opacity-40 rounded-lg text-xs flex items-center gap-1"
+              disabled={!draftName.trim()}
+              className="touch-target px-3 py-2 bg-surface-light hover:bg-slate-600 disabled:opacity-40 rounded-lg text-xs flex items-center justify-center gap-1"
             >
               + {t('distribute.add_item')}
             </button>
@@ -377,17 +434,17 @@ function CurrentNeedsCard({
           </div>
         </div>
       ) : items.length === 0 ? (
-        <p className="text-sm text-slate-500 italic">
+        <div className="text-xs text-slate-500 italic">
           {t('family_detail.no_needs_yet')}
-        </p>
+        </div>
       ) : (
-        <div className="flex flex-wrap gap-2">
-          {items.map((item) => (
+        <div className="flex flex-wrap gap-1.5">
+          {items.map((item, i) => (
             <span
-              key={item}
-              className="text-xs bg-brand/15 text-brand border border-brand/30 px-2 py-1 rounded-full"
+              key={i}
+              className="text-xs bg-brand/15 text-brand border border-brand/30 px-2 py-0.5 rounded-full"
             >
-              {item}
+              {item.name} <span className="opacity-70">×{item.quantity}</span>
             </span>
           ))}
         </div>
@@ -396,19 +453,28 @@ function CurrentNeedsCard({
   );
 }
 
+
+// --- Helper presentational components ---------------------------------------
+
 function LastAidIndicator({ lastAidAt }: { lastAidAt?: string }) {
   if (!lastAidAt) {
-    return <span className="text-priority-medium">Last aid: never</span>;
+    return <span className="text-priority-critical">Never received aid</span>;
   }
-  const days = Math.floor((Date.now() - new Date(lastAidAt).getTime()) / 86_400_000);
+  const days = Math.floor(
+    (Date.now() - new Date(lastAidAt).getTime()) / 86_400_000
+  );
   const label =
-    days <= 0 ? 'served today' : days === 1 ? 'served yesterday' : `${days}d ago`;
-  const colorClass =
-    days < 3 ? 'text-priority-normal' : days < 7 ? 'text-priority-medium' : 'text-priority-high';
+    days === 0 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`;
+  const colour =
+    days <= 3
+      ? 'text-priority-normal'
+      : days <= 7
+      ? 'text-priority-medium'
+      : 'text-priority-high';
   return (
-    <span className={`flex items-center gap-1 ${colorClass}`}>
-      {days < 3 && <CheckCircle2 size={12} />}
-      Last aid: {label}
+    <span className={colour}>
+      <CheckCircle2 size={12} className="inline me-1" />
+      Last aid {label}
     </span>
   );
 }
@@ -423,12 +489,12 @@ function Row({
   value: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <dt className="text-slate-400 capitalize flex items-center gap-2">
+    <div className="flex justify-between items-center gap-3">
+      <dt className="text-slate-400 flex items-center gap-1.5">
         {icon}
-        {label.replace('_', ' ')}
+        <span>{label}</span>
       </dt>
-      <dd className="text-slate-100 font-medium">{value}</dd>
+      <dd className="font-medium text-slate-100 capitalize">{value}</dd>
     </div>
   );
 }

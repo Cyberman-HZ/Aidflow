@@ -66,7 +66,9 @@ function familiesBlock(families: Family[]): string {
       `last_aid:${days === null ? 'never' : days + 'd ago'}`,
       `priority:${r.priority_score}/${r.priority_level}`,
       f.new_need_flagged ? `NEW_NEED_FLAGGED` : '',
-      f.recommended_items?.length ? `next_needs:[${f.recommended_items.join(', ')}]` : '',
+      f.recommended_items?.length
+        ? `next_needs:[${f.recommended_items.map((i) => `${i.name} ×${i.quantity}`).join(', ')}]`
+        : '',
       f.last_medical_notes ? `last_medical:"${f.last_medical_notes}"` : '',
       f.last_delivery_notes ? `last_delivery_notes:"${f.last_delivery_notes}"` : '',
       f.notes ? `notes:"${f.notes}"` : '',
@@ -370,4 +372,12 @@ export function buildSystemPrompt(snap: AppSnapshot, opts: BuildOpts): string {
     resellersBlock(snap.resellers),
     messagesBlock(snap.messages),
   ].join('\n');
+}
+
+/**
+ * Compact briefing for the Dashboard's executive summary. Kept short because
+ * Gemma 4's context window is small and the summary needs to render fast.
+ */
+export function briefingFacts(snap: AppSnapshot): string {
+  return dashboardBlock(snap);
 }

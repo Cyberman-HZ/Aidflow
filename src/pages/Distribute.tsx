@@ -443,9 +443,13 @@ function OrderCard({
           last_updated: now,
           ...(deliveryData
             ? {
+                // Map LineItems → NeededItems (name + quantity, drop empties).
                 recommended_items: (deliveryData.nextItems ?? [])
-                  .map((i) => i.item_name.trim())
-                  .filter((s) => s.length > 0),
+                  .map((i) => ({
+                    name: i.item_name.trim(),
+                    quantity: Math.max(1, Math.floor(i.quantity || 1)),
+                  }))
+                  .filter((it) => it.name.length > 0),
               }
             : {}),
           ...(deliveryData?.medicalNotes
@@ -966,7 +970,7 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
                     key={i}
                     className="text-[11px] bg-ai/15 text-ai border border-ai/30 px-2 py-0.5 rounded-full"
                   >
-                    {it}
+                    {it.name} <span className="opacity-70">×{it.quantity}</span>
                   </span>
                 ))}
               </div>
@@ -978,9 +982,16 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
             <button
               type="button"
               onClick={() => {
-                const recommended = computeRuleScore(selectedFamily).recommended_items;
+                // Prefer the family's curated needs (with their quantities)
+                // when present; otherwise fall back to the rule-engine
+                // defaults. Either way, items have name+quantity.
+                const source =
+                  selectedFamily.recommended_items &&
+                  selectedFamily.recommended_items.length > 0
+                    ? selectedFamily.recommended_items
+                    : computeRuleScore(selectedFamily).recommended_items;
                 setItems(
-                  recommended.map((name) => {
+                  source.map(({ name, quantity }) => {
                     const tmpl =
                       ITEM_TEMPLATES.find((tt) =>
                         tt.name.toLowerCase().includes(name.toLowerCase())
@@ -990,7 +1001,7 @@ function DistributionWizard({ onCreated }: { onCreated: () => void }) {
                       );
                     return {
                       item_name: tmpl?.name ?? name,
-                      quantity: 1,
+                      quantity: Math.max(1, quantity),
                       category: tmpl?.category ?? 'general',
                     };
                   })
@@ -1564,13 +1575,13 @@ function DeliveryConfirmModal({
   // default). The worker can edit / clear / add.
   const initial: LineItem[] =
     (family?.recommended_items?.length
-      ? family.recommended_items.map((name) => {
+      ? family.recommended_items.map(({ name, quantity }) => {
           const tmpl = ITEM_TEMPLATES.find(
             (tt) => tt.name.toLowerCase() === name.toLowerCase()
           );
           return {
             item_name: tmpl?.name ?? name,
-            quantity: 1,
+            quantity: Math.max(1, Math.floor(quantity || 1)),
             category: tmpl?.category ?? 'general',
           };
         })
@@ -2344,21 +2355,8 @@ function HistoryRow({
               ))}
             </ul>
           </div>
-          <div className="text-slate-500 flex flex-wrap gap-x-3 gap-y-0.5">
-            <span>Created {new Date(distribution.created_at).toLocaleString()}</span>
-            {distribution.dispatched_at && (
-              <span>· Dispatched {new Date(distribution.dispatched_at).toLocaleString()}</span>
-            )}
-            {distribution.delivered_at && (
-              <span>· Delivered {new Date(distribution.delivered_at).toLocaleString()}</span>
-            )}
-            {distribution.closed_at && (
-              <span>· Closed {new Date(distribution.closed_at).toLocaleString()}</span>
-            )}
-          </div>
         </div>
       )}
     </article>
   );
 }
-

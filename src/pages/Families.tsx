@@ -376,7 +376,7 @@ function FamilyRow({
                   key={i}
                   className="text-[11px] bg-ai/15 text-ai border border-ai/30 px-2 py-0.5 rounded-full"
                 >
-                  {item}
+                  {item.name} <span className="opacity-70">×{item.quantity}</span>
                 </span>
               ))}
               {items.length > 6 && (
@@ -399,7 +399,7 @@ function FamilyRow({
         title={t('families_edit.edit_title')}
         className="absolute top-3 end-3 z-10 p-1.5 rounded-md text-slate-400 hover:text-brand hover:bg-brand/10 transition-colors"
       >
-        <Edit2 size={14} />
+        <Edit2 size={16} />
       </button>
     </div>
   );

@@ -14,8 +14,9 @@ body,
 
 body {
   font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  background: #0f172a;
-  color: #f1f5f9;
+  /* Match tailwind surface.deep — a near-black with a cool teal undertone */
+  background: #070d14;
+  color: #e2e8f0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -25,20 +26,20 @@ html[dir='rtl'] body {
   font-family: 'Noto Sans Arabic', 'Inter', sans-serif;
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling — matches the new dark-teal palette */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-track {
-  background: #1e293b;
+  background: #0f1923;
 }
 ::-webkit-scrollbar-thumb {
-  background: #475569;
+  background: #1e3a45;
   border-radius: 5px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: #2d5562;
 }
 
 /* Field-first: large touch targets */
@@ -71,8 +72,8 @@ html[dir='rtl'] body {
   font-size: 0.85em;
 }
 .prose-ai pre {
-  background: #0f172a;
-  border: 1px solid #334155;
+  background: #070d14;
+  border: 1px solid #1a2632;
   border-radius: 6px;
   padding: 0.75rem;
   margin: 0.5rem 0;
@@ -116,13 +117,13 @@ html[dir='rtl'] body {
   font-style: italic;
 }
 .prose-ai a {
-  color: #38bdf8;
+  color: #22d3ee; /* cyan-400 — bright link on dark background */
   text-decoration: underline;
 }
-.prose-ai a:hover { color: #7dd3fc; }
+.prose-ai a:hover { color: #67e8f9; }
 .prose-ai hr {
   border: 0;
-  border-top: 1px solid #334155;
+  border-top: 1px solid #1a2632;
   margin: 0.75rem 0;
 }
 .prose-ai table {
@@ -132,20 +133,20 @@ html[dir='rtl'] body {
   width: 100%;
 }
 .prose-ai th, .prose-ai td {
-  border: 1px solid #334155;
+  border: 1px solid #1a2632;
   padding: 4px 8px;
   text-align: start;
 }
 .prose-ai th {
-  background: #1e293b;
+  background: #0f1923;
   font-weight: 600;
 }
 
 /* Leaflet popup dark mode */
 .leaflet-popup-content-wrapper,
 .leaflet-popup-tip {
-  background: #1e293b !important;
-  color: #f1f5f9 !important;
+  background: #0f1923 !important;
+  color: #e2e8f0 !important;
 }
 .leaflet-container a.leaflet-popup-close-button {
   color: #f1f5f9 !important;

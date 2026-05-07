@@ -5,6 +5,17 @@
 export type DisplacementStatus = 'resident' | 'recently_displaced' | 'refugee';
 export type IncomeLevel = 'none' | 'minimal' | 'moderate';
 export type PriorityLevel = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'NORMAL';
+
+/**
+ * A single need on a family's "Current need items" card.
+ * Stored as objects (not strings) so quantity is first-class everywhere —
+ * the family card, the distribute wizard's "Suggested needs", the delivery
+ * confirm modal's pre-population, and the AI assistant's action protocol.
+ */
+export interface NeededItem {
+  name: string;
+  quantity: number;
+}
 export type UserRole =
   | 'admin'
   | 'supervisor'
@@ -33,7 +44,7 @@ export interface Family {
   priority_score?: number;
   priority_level?: PriorityLevel;
   ai_reason?: string;
-  recommended_items?: string[];
+  recommended_items?: NeededItem[];
   last_aid_at?: string;
   new_need_flagged?: boolean;
   /** Free-text medical notes captured by the field worker on the last delivery. */
@@ -252,6 +263,7 @@ export interface ResellersDataset {
   version: number;
   updated_at: string;
   source_note?: string;
+  official_directory_url?: string;
   resellers: StarlinkReseller[];
 }
 
@@ -260,13 +272,21 @@ export interface PrioritizationResult {
   priority_score: number;
   priority_level: PriorityLevel;
   reason: string;
-  recommended_items: string[];
-  sector?: string;
+  recommended_items: NeededItem[];
 }
+
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
-  citations?: { doc_id: string; title: string; page: number; url?: string }[];
   timestamp?: string;
+  citations?: Citation[];
+}
+
+export interface Citation {
+  doc_id: string;
+  title: string;
+  page: number;
+  url?: string;
+  snippet?: string;
 }
