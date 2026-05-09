@@ -194,7 +194,7 @@ export const STATUS_LABEL: Record<CoverageStatus, string> = {
 
 export const STATUS_COLOR: Record<CoverageStatus, string> = {
   available: '#22c55e', // green
-  soon: '#0ea5e9',      // sky
+  soon: '#00ADB5',      // brand teal — visible in both light and dark modes
   waitlist: '#eab308',  // yellow
   unavailable: '#64748b', // slate
 };

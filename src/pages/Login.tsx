@@ -47,7 +47,19 @@ export default function Login() {
       </div>
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex w-16 h-16 rounded-2xl bg-brand items-center justify-center mb-4 shadow-2xl shadow-brand/30">
+          <img
+            src="/logo.png"
+            alt="AidFlow Pro"
+            className="mx-auto mb-4 h-20 w-auto object-contain"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = 'none';
+              (e.currentTarget.nextSibling as HTMLElement | null)?.style?.setProperty('display', 'inline-flex');
+            }}
+          />
+          <div
+            className="inline-flex w-16 h-16 rounded-2xl bg-brand items-center justify-center mb-4 shadow-2xl shadow-brand/30"
+            style={{ display: 'none' }}
+          >
             <ShieldCheck className="text-white" size={32} />
           </div>
           <h1 className="text-3xl font-bold">{t('app.name')}</h1>
@@ -128,6 +140,15 @@ export default function Login() {
             </ul>
           </div>
         </form>
+
+        {/* Required attribution per the Gemma model variant naming &
+            attribution guidelines. Tiny but always-visible: the login
+            screen is the first thing users see. */}
+        <p className="text-center text-[10px] text-slate-500 mt-6 leading-snug">
+          {t('login.gemma_trademark') ?? 'Gemma is a trademark of Google LLC.'}{' '}
+          {t('login.about_disclaimer') ??
+            'AidFlow Pro is not affiliated with or endorsed by Google.'}
+        </p>
       </div>
     </div>
   );

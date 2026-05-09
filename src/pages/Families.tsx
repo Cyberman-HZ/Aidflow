@@ -81,6 +81,9 @@ export default function Families() {
     [families]
   );
 
+  // Trim once so a stray space at the start/end of the search box doesn't
+  // wipe the result list — common when users paste or tap-type on mobile.
+  const q = search.trim().toLowerCase();
   const filtered = families
     .filter((f) => !sectorFilter || f.location_sector === sectorFilter)
     .filter((f) => {
@@ -89,9 +92,9 @@ export default function Families() {
     })
     .filter(
       (f) =>
-        !search ||
-        f.head_name.toLowerCase().includes(search.toLowerCase()) ||
-        f.family_id.toLowerCase().includes(search.toLowerCase())
+        !q ||
+        f.head_name.toLowerCase().includes(q) ||
+        f.family_id.toLowerCase().includes(q)
     );
 
   // Sort with the selected key. Ties fall back to priority score.
@@ -357,7 +360,9 @@ function FamilyRow({
             {family.medical_conditions.length > 0 && (
               <span className="flex items-center gap-1 text-priority-high">
                 <HeartPulse size={12} />
-                {family.medical_conditions.length} medical
+                {t('families.medical_count', {
+                  count: family.medical_conditions.length,
+                })}
               </span>
             )}
             <span>· {family.location_sector}</span>

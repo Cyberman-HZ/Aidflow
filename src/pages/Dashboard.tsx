@@ -529,17 +529,22 @@ export default function Dashboard() {
           <div style={{ width: '100%', height: 240 }}>
             <ResponsiveContainer>
               <BarChart data={sectorData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                <XAxis dataKey="sector" stroke="#94a3b8" tick={{ fontSize: 11 }} />
-                <YAxis stroke="#94a3b8" />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--slate-700))" />
+                <XAxis
+                  dataKey="sector"
+                  stroke="rgb(var(--slate-500))"
+                  tick={{ fontSize: 11, fill: 'rgb(var(--slate-300))' }}
+                />
+                <YAxis stroke="rgb(var(--slate-500))" tick={{ fill: 'rgb(var(--slate-300))' }} />
                 <Tooltip
                   contentStyle={{
-                    background: '#1e293b',
-                    border: '1px solid #475569',
+                    background: 'rgb(var(--surface))',
+                    border: '1px solid rgb(var(--slate-700))',
                     borderRadius: 8,
+                    color: 'rgb(var(--slate-200))',
                   }}
                 />
-                <Bar dataKey="count" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="count" fill="#00ADB5" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -551,10 +556,20 @@ export default function Dashboard() {
         <div style={{ height: 220 }}>
           <ResponsiveContainer>
             <LineChart data={timeData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="day" stroke="#94a3b8" tick={{ fontSize: 11 }} />
-              <YAxis stroke="#94a3b8" />
-              <Tooltip contentStyle={{ background: '#1e293b', border: '1px solid #475569' }} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--slate-700))" />
+              <XAxis
+                dataKey="day"
+                stroke="rgb(var(--slate-500))"
+                tick={{ fontSize: 11, fill: 'rgb(var(--slate-300))' }}
+              />
+              <YAxis stroke="rgb(var(--slate-500))" tick={{ fill: 'rgb(var(--slate-300))' }} />
+              <Tooltip
+                contentStyle={{
+                  background: 'rgb(var(--surface))',
+                  border: '1px solid rgb(var(--slate-700))',
+                  color: 'rgb(var(--slate-200))',
+                }}
+              />
               <Line
                 type="monotone"
                 dataKey="count"

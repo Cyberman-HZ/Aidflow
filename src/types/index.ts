@@ -189,9 +189,18 @@ export interface Worker {
   last_name: string;
   position: WorkerPosition | string;
   phone?: string;
+  email?: string;
+  address?: string;
   notes?: string;
   created_at: string;
   user_id?: string;
+  /**
+   * Soft-delete marker. When set, the row is hidden from the Workers list and
+   * from worker pickers, but is kept in IndexedDB so historic order references
+   * (`assigned_to` / `delivered_by`) can still resolve names. Hard-delete is
+   * blocked on workers with active orders to preserve referential integrity.
+   */
+  deleted_at?: string;
 }
 
 export type BitchatMessageStatus =

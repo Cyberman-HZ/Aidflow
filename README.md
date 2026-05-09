@@ -127,3 +127,12 @@ The Bitchat module uses the **Web Bluetooth API**, available on Chrome / Edge on
 ## License
 
 MIT — see `LICENSE`. The Gemma 4 model is governed by Google's [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+
+## Attribution
+
+Gemma is a trademark of Google LLC. AidFlow Pro is independently developed for the Gemma 4 Good Hackathon and is **not affiliated with, endorsed by, or sponsored by Google**. The "Gemma 4" reference in this README and the in-app messaging accurately identifies the underlying model used for inference and follows the Gemma model variant naming & attribution guidelines:
+
+- The project name "AidFlow Pro" does not contain "gemma".
+- The model is mentioned in the project description and repository path for discoverability ("AidFlow Pro is powered by Gemma 4 E4B via Ollama").
+- The app does not reuse Gemma's brand marks or colors in its own branding (AidFlow Pro uses a teal palette and a custom logo).
+- The required trademark notice is displayed in the app's Login screen footer and in Settings → About.

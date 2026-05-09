@@ -20,8 +20,8 @@ export default defineConfig({
         short_name: 'AidFlow',
         description:
           'AI-Powered Humanitarian Aid Distribution Platform — Offline-first, powered by Gemma 4 E4B.',
-        theme_color: '#0ea5e9',
-        background_color: '#0f172a',
+        theme_color: '#FFFFFF',
+        background_color: '#FFFFFF',
         display: 'standalone',
         orientation: 'any',
         start_url: '/',

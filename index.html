@@ -2,9 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/logo.png" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0ea5e9" />
+    <meta name="theme-color" content="#FFFFFF" />
     <meta name="description" content="AidFlow Pro — AI-Powered Humanitarian Aid Distribution Platform. Offline-first. Powered by Gemma 4 E4B." />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -12,8 +13,36 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <title>AidFlow Pro — Humanitarian Aid AI</title>
+    <!--
+      Pre-paint theme bootstrap. Reads the persisted Zustand state and the
+      OS preference, then sets the `dark` class on <html> BEFORE any CSS
+      lands, so the user never sees a flash of the wrong colour scheme.
+      Mirrors the runtime logic in src/stores/settingsStore.ts.
+    -->
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('aidflow-settings');
+          var pref = 'system';
+          if (raw) {
+            var parsed = JSON.parse(raw);
+            if (parsed && parsed.state && parsed.state.theme) pref = parsed.state.theme;
+          }
+          var dark =
+            pref === 'dark' ||
+            (pref === 'system' &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', dark ? '#222831' : '#FFFFFF');
+        } catch (e) {
+          /* no-op — fall back to default light theme */
+        }
+      })();
+    </script>
   </head>
-  <body class="bg-surface-deep text-slate-100">
+  <body class="bg-surface-deep text-slate-300">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

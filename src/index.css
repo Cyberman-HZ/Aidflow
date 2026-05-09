@@ -2,8 +2,57 @@
 @tailwind components;
 @tailwind utilities;
 
+/* =========================================================================
+   Theme tokens — RGB triplets so Tailwind can apply alpha (e.g. /40).
+   `:root` defines the LIGHT defaults; `.dark` (added on <html>) overrides
+   them with DARK values. Toggling the theme is a single class swap.
+   Palette source: colorhunt.co/palette/222831393e4600adb5eeeeee
+   ========================================================================= */
+
 :root {
-  color-scheme: dark;
+  /* LIGHT MODE — page is white, cards are #EEEEEE for subtle lift */
+  --surface-deep:  255 255 255;  /* page bg                  — #FFFFFF */
+  --surface:       238 238 238;  /* cards / panels           — #EEEEEE */
+  /* Hover / raised — noticeably darker than the card so hover feedback is
+     visible. Was slate-200 (only ~6% darker than #EEEEEE) which barely
+     read against the card. */
+  --surface-light: 209 218 224;  /* raised / hover           — soft cool gray */
+
+  --brand:           0 173 181;  /* teal accent              — #00ADB5 */
+  --brand-dark:      0 138 144;  /* darker teal hover/pressed         */
+  --accent:          0 173 181;  /* same as brand in light mode       */
+
+  /* Slate scale is INVERTED for light mode so existing `text-slate-100`
+     (originally meant light-on-dark) reads as primary dark text. */
+  --slate-100:  34  40  49;  /* primary text / heading       — #222831 */
+  --slate-200:  57  62  70;  /* strong secondary text        — #393E46 */
+  --slate-300:  71  85 105;  /* body text                    — slate-700 */
+  --slate-400:  71  85 105;  /* labels / secondary           — slate-700 */
+  --slate-500: 100 116 139;  /* muted (mid)                  — slate-500 */
+  --slate-600: 148 163 184;  /* placeholder / disabled       — slate-400 */
+  --slate-700: 203 213 225;  /* light border                 — slate-300 */
+  --slate-800: 226 232 240;  /* very-light divider           — slate-200 */
+}
+
+.dark {
+  /* DARK MODE — palette dark page, palette dark-gray cards */
+  --surface-deep:  34  40  49;  /* page bg                   — #222831 */
+  --surface:       57  62  70;  /* cards / panels            — #393E46 */
+  --surface-light: 75  85  99;  /* raised / hover            — slate-600 */
+
+  --brand:           0 173 181;  /* same teal in both modes  — #00ADB5 */
+  --brand-dark:      0 138 144;
+  --accent:        153 246 228;  /* lighter teal for highlights on dark */
+
+  /* Slate scale follows the original Tailwind defaults (light text on dark) */
+  --slate-100: 241 245 249;
+  --slate-200: 226 232 240;
+  --slate-300: 203 213 225;
+  --slate-400: 148 163 184;
+  --slate-500: 100 116 139;
+  --slate-600:  75  85  99;
+  --slate-700:  57  62  70;     /* border on dark cards     — #393E46 */
+  --slate-800:  34  40  49;
 }
 
 html,
@@ -14,11 +63,11 @@ body,
 
 body {
   font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  /* Match tailwind surface.deep — a near-black with a cool teal undertone */
-  background: #070d14;
-  color: #e2e8f0;
+  background: rgb(var(--surface-deep));
+  color: rgb(var(--slate-300));
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 150ms ease, color 150ms ease;
 }
 
 html[lang='ar'] body,
@@ -26,20 +75,24 @@ html[dir='rtl'] body {
   font-family: 'Noto Sans Arabic', 'Inter', sans-serif;
 }
 
-/* Scrollbar styling — matches the new dark-teal palette */
+/* Set color-scheme so native widgets (scrollbars, form controls) match */
+:root      { color-scheme: light; }
+html.dark  { color-scheme: dark; }
+
+/* Scrollbar — themed via variables */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f1923;
+  background: rgb(var(--surface-light));
 }
 ::-webkit-scrollbar-thumb {
-  background: #1e3a45;
+  background: rgb(var(--slate-700));
   border-radius: 5px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #2d5562;
+  background: rgb(var(--slate-600));
 }
 
 /* Field-first: large touch targets */
@@ -56,24 +109,27 @@ html[dir='rtl'] body {
   line-height: 1.55;
 }
 .prose-ai strong {
-  color: #f8fafc;
+  color: rgb(var(--slate-100));
   font-weight: 600;
 }
 .prose-ai em {
   font-style: italic;
-  color: #e2e8f0;
+  color: rgb(var(--slate-300));
 }
 .prose-ai code {
-  background: rgba(139, 92, 246, 0.18);
-  color: #ddd6fe;
+  background: rgb(var(--brand) / 0.12);
+  color: rgb(var(--brand-dark));
   padding: 1px 5px;
   border-radius: 4px;
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
   font-size: 0.85em;
 }
+.dark .prose-ai code {
+  color: rgb(var(--accent));
+}
 .prose-ai pre {
-  background: #070d14;
-  border: 1px solid #1a2632;
+  background: rgb(var(--surface-light));
+  border: 1px solid rgb(var(--slate-700));
   border-radius: 6px;
   padding: 0.75rem;
   margin: 0.5rem 0;
@@ -83,7 +139,7 @@ html[dir='rtl'] body {
 .prose-ai pre code {
   background: transparent;
   padding: 0;
-  color: #e2e8f0;
+  color: rgb(var(--slate-200));
 }
 .prose-ai ul {
   list-style: disc;
@@ -100,7 +156,7 @@ html[dir='rtl'] body {
 }
 .prose-ai li > p { margin: 0; }
 .prose-ai h1, .prose-ai h2, .prose-ai h3, .prose-ai h4 {
-  color: #f1f5f9;
+  color: rgb(var(--slate-100));
   font-weight: 700;
   margin: 0.6rem 0 0.3rem 0;
   line-height: 1.25;
@@ -110,20 +166,21 @@ html[dir='rtl'] body {
 .prose-ai h3 { font-size: 0.95rem; }
 .prose-ai h4 { font-size: 0.9rem; }
 .prose-ai blockquote {
-  border-inline-start: 3px solid #475569;
+  border-inline-start: 3px solid rgb(var(--brand));
   padding-inline-start: 0.75rem;
   margin: 0.5rem 0;
-  color: #cbd5e1;
+  color: rgb(var(--slate-400));
   font-style: italic;
 }
 .prose-ai a {
-  color: #22d3ee; /* cyan-400 — bright link on dark background */
+  color: rgb(var(--brand));
   text-decoration: underline;
 }
-.prose-ai a:hover { color: #67e8f9; }
+.prose-ai a:hover { color: rgb(var(--brand-dark)); }
+.dark .prose-ai a:hover { color: rgb(var(--accent)); }
 .prose-ai hr {
   border: 0;
-  border-top: 1px solid #1a2632;
+  border-top: 1px solid rgb(var(--slate-700));
   margin: 0.75rem 0;
 }
 .prose-ai table {
@@ -133,23 +190,24 @@ html[dir='rtl'] body {
   width: 100%;
 }
 .prose-ai th, .prose-ai td {
-  border: 1px solid #1a2632;
+  border: 1px solid rgb(var(--slate-700));
   padding: 4px 8px;
   text-align: start;
 }
 .prose-ai th {
-  background: #0f1923;
+  background: rgb(var(--surface-light));
   font-weight: 600;
+  color: rgb(var(--slate-100));
 }
 
-/* Leaflet popup dark mode */
+/* Leaflet popup — themed via variables */
 .leaflet-popup-content-wrapper,
 .leaflet-popup-tip {
-  background: #0f1923 !important;
-  color: #e2e8f0 !important;
+  background: rgb(var(--surface)) !important;
+  color: rgb(var(--slate-200)) !important;
 }
 .leaflet-container a.leaflet-popup-close-button {
-  color: #f1f5f9 !important;
+  color: rgb(var(--slate-400)) !important;
 }
 
 /* Animation */
@@ -161,16 +219,16 @@ html[dir='rtl'] body {
   animation: pulse-soft 1.4s ease-in-out infinite;
 }
 
-/* Focus ring (accessibility) */
+/* Focus ring (accessibility) — brand teal, visible in both modes */
 *:focus-visible {
-  outline: 2px solid #0ea5e9;
+  outline: 2px solid rgb(var(--brand));
   outline-offset: 2px;
   border-radius: 4px;
 }
 
 /* Hide the native datalist dropdown indicator on text inputs that have a
-   `list=` attribute. The default chevron looks out of place on our dark
-   theme and makes users think the field is read-only / select-only. */
+   `list=` attribute. The default chevron looks out of place and makes
+   users think the field is read-only / select-only. */
 input[list]::-webkit-calendar-picker-indicator {
   display: none !important;
   opacity: 0;

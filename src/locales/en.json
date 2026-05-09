@@ -3,6 +3,13 @@
     "name": "AidFlow Pro",
     "tagline": "AI-Powered Humanitarian Aid Distribution"
   },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System",
+    "toggle": "Theme",
+    "switch_to": "Switch to"
+  },
   "nav": {
     "dashboard": "Dashboard & Reports",
     "families": "Families",
@@ -29,14 +36,16 @@
     "submit": "Sign in",
     "demo_users": "Demo users",
     "wrong_pin": "Invalid PIN",
-    "select_user": "Select user"
+    "select_user": "Select user",
+    "gemma_trademark": "Gemma is a trademark of Google LLC.",
+    "about_disclaimer": "AidFlow Pro is not affiliated with or endorsed by Google."
   },
   "dashboard": {
     "title": "Mission Overview",
     "kpi_families": "Families Served Today",
     "kpi_items": "Items Distributed",
     "kpi_critical": "Critical Priority",
-    "kpi_ai_status": "Gemma 4 Status",
+    "kpi_ai_status": "AI Engine Status",
     "recent_distributions": "Recent Distributions",
     "priority_distribution": "Priority Distribution",
     "view_all": "View all",
@@ -69,7 +78,9 @@
     "sector": "Sector",
     "last_aid": "Last aid",
     "days_ago": "{{n}}d ago",
-    "never": "never"
+    "never": "never",
+    "medical_count_one": "{{count}} medical condition",
+    "medical_count_other": "{{count}} medical conditions"
   },
   "family_detail": {
     "title": "Family {{id}}",
@@ -79,14 +90,15 @@
     "displacement": "Displacement status",
     "income": "Income",
     "ai_breakdown": "AI Score Breakdown",
-    "ask_about": "Ask Gemma 4 about this family",
+    "ask_about": "Ask AidFlow Assistant about this family",
     "history": "Distribution History",
     "no_history": "No distributions recorded yet.",
     "edit": "Edit profile",
     "current_needs": "Current need items",
     "edit_needs": "Edit",
     "add_need_placeholder": "Add an item (e.g. infant formula)",
-    "no_needs_yet": "No items yet — click Edit to add some."
+    "no_needs_yet": "No items yet — click Edit to add some.",
+    "not_found": "Family not found"
   },
   "distribute": {
     "title": "Distribution Orders",
@@ -194,7 +206,12 @@
     "cancel_modal_hint": "Why is this order being cancelled? This is recorded in the order history.",
     "fail_modal_placeholder": "e.g. Family not home; access road blocked; refused delivery.",
     "cancel_modal_placeholder": "e.g. Family relocated; duplicate order; no longer needed.",
-    "fail_modal_confirm_cancel": "Cancel order"
+    "fail_modal_confirm_cancel": "Cancel order",
+    "error_no_items": "At least one item with a positive quantity is required before saving an order.",
+    "schedule_invalid": "Scheduled date is invalid.",
+    "schedule_past": "Scheduled date cannot be in the past.",
+    "schedule_too_far": "Scheduled date cannot be more than 1 year in the future.",
+    "create_failed": "Could not create the order. "
   },
   "assistant": {
     "title": "AidFlow Assistant",
@@ -202,6 +219,7 @@
     "send": "Send",
     "thinking": "Thinking…",
     "use_rag": "Search knowledge base",
+    "use_rag_locked": "Knowledge-base search is always on for this page.",
     "use_wiki": "Wikipedia web search",
     "system_note": "Powered by your local Gemma 4 E4B — your data never leaves this device.",
     "examples": {
@@ -214,9 +232,34 @@
   "knowledge": {
     "title": "Knowledge Base",
     "subtitle": "Upload PDF protocols and aid usage guides. AidFlow Assistant will reference them when answering.",
-    "tab_documents": "Documents",
-    "tab_guides": "Aid Guides",
     "drop_zone": "Drop PDFs here or click to browse",
+    "library": "Library",
+    "upload_and_process": "Upload & process",
+    "no_docs_hint": "Upload a PDF protocol to get started.",
+    "search_placeholder": "Search by title, category, filename, or content…",
+    "no_matches": "No documents match your search.",
+    "no_matches_hint": "Try a different keyword, or clear the search to see the full library.",
+    "match_content": "in content",
+    "matched_in_content": "Matched inside the document content, not the title.",
+    "summarize": "Summarize",
+    "summarizing": "Summarizing…",
+    "ai_summary": "AI summary",
+    "summary_loading": "Reading the document and writing a summary…",
+    "summary_truncated": "The document is longer than the model can read in one pass; the summary covers only the beginning. Ask follow-up questions for later sections.",
+    "scanned_warning": "This PDF was uploaded but no text could be extracted. It looks like a scanned image PDF without an OCR text layer. The AI cannot read or summarize it until you re-upload an OCR'd version.",
+    "scanned_title": "Scanned PDF — not searchable",
+    "scanned_badge": "Scanned — not searchable",
+    "scanned_tooltip": "No text was extracted from this PDF. It looks like a scanned image without OCR — the AI cannot read or summarize it.",
+    "upload_failed": "Failed to process PDF: ",
+    "upload_failed_title": "Upload failed",
+    "delete_title": "Delete document?",
+    "delete_body": "Are you sure you want to delete \"{{title}}\"? This removes the PDF and its extracted chunks from your library. This action cannot be undone.",
+    "delete_failed": "Could not delete the document. ",
+    "bad_file_title": "Only PDF files are supported",
+    "bad_file_body": "You dropped a non-PDF file. The Knowledge Base only ingests PDF documents.",
+    "clear_search": "Clear search",
+    "partial_embed_title": "Document saved with partial embeddings",
+    "partial_embed_body": "{{missing}} of {{total}} chunks could not be embedded — Ollama may have been unreachable mid-ingest. The document is still searchable via keyword fallback, but semantic search quality will be lower until you re-upload while Ollama is online.",
     "uploading": "Processing {{name}}…",
     "extracting": "Extracting text…",
     "embedding": "Embedding chunks…",
@@ -321,6 +364,7 @@
     "title": "Settings",
     "language": "Language",
     "dark_mode": "Dark mode",
+    "appearance": "Appearance",
     "ai_section": "AI Configuration",
     "ollama_url": "Ollama base URL",
     "ollama_model": "Gemma 4 model tag",
@@ -331,7 +375,13 @@
     "data_section": "Data",
     "reset_demo": "Reset demo data",
     "reset_confirm": "This will erase all local data and reload the demo seed. Continue?",
-    "save": "Save"
+    "save": "Save",
+    "about": "About",
+    "about_tagline": "AI-powered humanitarian aid distribution platform, built for the Gemma 4 Good Hackathon.",
+    "about_model": "Inference is powered by Gemma 4 E4B running locally via Ollama. Embeddings (when available) use nomic-embed-text. The app is fully offline-first; no family data ever leaves the device.",
+    "gemma_trademark": "Gemma is a trademark of Google LLC.",
+    "about_disclaimer": "AidFlow Pro is independently developed and is not affiliated with, endorsed by, or sponsored by Google.",
+    "about_license": "AidFlow Pro source: MIT License. Gemma model weights: governed by Google's Gemma Terms of Use."
   },
   "reports": {
     "title": "Reports",
@@ -352,7 +402,8 @@
     "yes": "Yes",
     "no": "No",
     "all": "All",
-    "back": "Back"
+    "back": "Back",
+    "ok": "OK"
   },
   "workers": {
     "title": "Workers",
@@ -361,7 +412,7 @@
     "edit_title": "Edit worker",
     "save": "Save worker",
     "delete": "Delete worker",
-    "search_placeholder": "Search by name, position, or phone…",
+    "search_placeholder": "Search by name, position, phone, email, or address…",
     "all_positions": "All positions",
     "first_name": "First name",
     "last_name": "Last name",
@@ -379,7 +430,17 @@
     "empty_filter_body": "Try a different search or position filter.",
     "stat_assigned": "Active",
     "stat_delivered": "Delivered",
-    "stat_failed": "Failed"
+    "stat_failed": "Failed",
+    "email": "Email",
+    "address": "Address",
+    "invalid_email": "Email looks invalid.",
+    "delete_title": "Delete worker?",
+    "delete_body": "Are you sure you want to delete {{name}}? This action cannot be undone.",
+    "delete_failed": "Could not delete the worker. ",
+    "cannot_delete_pending": "This worker is assigned to {{count}} pending order(s). Reassign or cancel them first.",
+    "duplicate_warning": "A worker with this name and position already exists.",
+    "duplicate_id": "Could not save — please try again (id collision).",
+    "save_failed": "Could not save the worker. "
   },
   "priority": {
     "CRITICAL": "Critical",
@@ -399,7 +460,13 @@
     "elderly_count": "Elderly (65+)",
     "has_pregnant_member": "Has a pregnant or nursing member",
     "displacement_status": "Displacement status",
+    "displacement_resident": "Resident",
+    "displacement_recently_displaced": "Recently displaced",
+    "displacement_refugee": "Refugee",
     "income_level": "Income level",
+    "income_none": "None",
+    "income_minimal": "Minimal",
+    "income_moderate": "Moderate",
     "medical_conditions": "Medical conditions",
     "medical_conditions_hint": "Add one condition per row. Mark severity in parentheses, e.g. \"diabetes (chronic)\" or \"cholera exposure (critical)\".",
     "medical_add": "Add",
@@ -417,6 +484,8 @@
     "street_placeholder": "e.g. 12 Olive Tree Lane",
     "city": "City / town",
     "city_placeholder": "e.g. Damascus",
-    "severity": "Severity"
+    "severity": "Severity",
+    "sector": "Location sector",
+    "pregnant_label": "Has a pregnant or nursing member"
   }
 }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
 import {
@@ -57,9 +57,11 @@ export default function FamilyDetail() {
     return (
       <div>
         <Link to="/families" className="text-sm text-brand hover:underline inline-flex items-center gap-1">
-          <ArrowLeft size={14} /> Families
+          <ArrowLeft size={14} /> {t('families.title')}
         </Link>
-        <Card><EmptyState title="Family not found" /></Card>
+        <Card>
+          <EmptyState title={t('family_detail.not_found') ?? 'Family not found'} />
+        </Card>
       </div>
     );
   }
@@ -169,10 +171,14 @@ export default function FamilyDetail() {
             systemPrompt={`You are AidFlow Pro's AI assistant for family ${family.family_id} (${family.head_name}).
 
 ==========================================================
-🟢 CURRENT NEED ITEMS — THE EXACT LIST (verbatim from the database):
+🟢 CURRENT NEED ITEMS — THE EXACT LIST (matches the chips on screen):
 ${
-  family.recommended_items && family.recommended_items.length > 0
-    ? family.recommended_items
+  // Use `recommended` (which falls back to the rule engine when the DB
+  // row has no items) so the system prompt stays in lockstep with what
+  // the user actually sees rendered. Otherwise the AI denies items that
+  // are visible on screen.
+  recommended.length > 0
+    ? recommended
         .map((it, i) => `  ${i + 1}. ${it.name} (quantity: ${it.quantity})`)
         .join('\n')
     : '  (this family has no current need items)'
@@ -183,10 +189,13 @@ When the user mentions any item from the list above (case-insensitive substring 
 
 Family demographics: ${family.member_count} members, ${family.children_under_5} children<5, ${family.elderly_count} elderly${family.has_pregnant_member ? ', has pregnant/nursing member' : ''}. Sector: ${family.location_sector}. Displacement: ${family.displacement_status}. Income: ${family.income_level}. Medical: ${family.medical_conditions.length === 0 ? 'none' : family.medical_conditions.join(', ')}.
 
+DISTRIBUTION HISTORY: this family has ${history.length} distribution record(s) on file (delivered, failed, cancelled, pending, or out for delivery). The full per-row details — date, status, items+quantities, who delivered, failure reason — are embedded in every user turn under "recent_distributions" in the FAMILY CONTEXT block. When the user asks about past deliveries, last aid date, items previously given, who delivered them, or any history question, ANSWER FROM THOSE ROWS. Do NOT say you have no access — the records are right there.
+
 Be concise. Reference the family's specific situation. When the user asks for a change, propose it as an action block (see ACTIONS section below) — do not claim a change is already done.`}
             contextLabel={`Family ${family.family_id} — ${family.head_name}`}
             placeholder={t('assistant.placeholder')}
             family={familyForAI}
+            history={history}
           />
         </div>
       </div>
@@ -222,6 +231,12 @@ function CurrentNeedsCard({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [qtyError, setQtyError] = useState<string | null>(null);
+  // Synchronous re-entrancy guard. `disabled={saving}` is a render-side
+  // gate — it doesn't stop a programmatic / screen-reader / batched-React
+  // double-trigger from queuing two concurrent db.families.update calls.
+  // The ref is checked inside save() before any await so duplicates are
+  // dropped at the function boundary. Mirrors the pattern in Distribute.
+  const busyRef = useRef(false);
 
   const startEdit = () => {
     setDraft(items.map((i) => ({ ...i })));
@@ -269,6 +284,8 @@ function CurrentNeedsCard({
   };
 
   const save = async () => {
+    if (busyRef.current) return; // drop duplicate save while one is in flight
+    busyRef.current = true;
     setSaving(true);
     setSaveError(null);
     try {
@@ -279,12 +296,25 @@ function CurrentNeedsCard({
       setEditing(false);
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
-      // Map common Dexie / IndexedDB errors to user-friendly messages.
+      // Map common Dexie / IndexedDB error names to user-friendly messages.
+      // The fallback exposes the raw text only as a last resort — if you
+      // see it in the wild, add the new error name to one of the buckets.
       let friendly: string;
       if (/QuotaExceeded/i.test(raw)) {
-        friendly = 'Could not save — your device is out of storage. Free up some space and try again.';
-      } else if (/InvalidState|Aborted|NotFound/i.test(raw)) {
-        friendly = 'Could not save — the database is in an unexpected state. Try refreshing the page.';
+        friendly =
+          'Could not save — your device is out of storage. Free up some space and try again.';
+      } else if (/InvalidState|Aborted|NotFound|VersionError/i.test(raw)) {
+        friendly =
+          'Could not save — the database is in an unexpected state. Try refreshing the page.';
+      } else if (/Constraint|Data\s?Error/i.test(raw)) {
+        friendly =
+          'Could not save — one of the values is invalid for the database schema.';
+      } else if (/NotAllowed|Security/i.test(raw)) {
+        friendly =
+          'Could not save — the browser blocked access to local storage (private mode?).';
+      } else if (/Timeout|Transaction/i.test(raw)) {
+        friendly =
+          'Could not save — the save took too long. Check your connection and try again.';
       } else {
         friendly = `Could not save the changes. ${raw}`;
       }
@@ -293,6 +323,7 @@ function CurrentNeedsCard({
       console.error('[CurrentNeedsCard] save failed', e);
     } finally {
       setSaving(false);
+      busyRef.current = false;
     }
   };
 

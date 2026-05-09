@@ -379,7 +379,7 @@ function PhoneInstallPrompt() {
       <text x="27" y="85" fontSize="4" fill="#cbd5e1" textAnchor="middle">
         Cancel
       </text>
-      <rect x="46" y="78" width="22" height="10" rx="2" fill="#0ea5e9" />
+      <rect x="46" y="78" width="22" height="10" rx="2" fill="#00ADB5" />
       <text x="57" y="85" fontSize="4" fill="#fff" textAnchor="middle">
         Install
       </text>
@@ -391,7 +391,7 @@ function PhonePermission({ label }: { label: string }) {
   return (
     <PhoneFrame>
       <rect x="10" y="38" width="65" height="65" rx="4" fill="#1e293b" stroke="#475569" />
-      <circle cx="42" cy="55" r="6" fill="#0ea5e9" />
+      <circle cx="42" cy="55" r="6" fill="#00ADB5" />
       <text x="42" y="58" fontSize="6" fill="#fff" textAnchor="middle">
         ⌬
       </text>
@@ -423,7 +423,7 @@ function PhoneNickname() {
       <text x="18" y="54" fontSize="4" fill="#22c55e">
         FW-Pierre
       </text>
-      <rect x="22" y="68" width="41" height="12" rx="3" fill="#0ea5e9" />
+      <rect x="22" y="68" width="41" height="12" rx="3" fill="#00ADB5" />
       <text x="42" y="76" fontSize="4" fill="#fff" textAnchor="middle">
         Continue
       </text>
@@ -437,8 +437,8 @@ function PhoneChannels() {
       <text x="42" y="20" fontSize="4" fill="#cbd5e1" textAnchor="middle" fontWeight="bold">
         Channels
       </text>
-      <rect x="12" y="26" width="61" height="10" rx="1" fill="#0ea5e9" opacity="0.25" />
-      <text x="16" y="33" fontSize="4" fill="#0ea5e9">
+      <rect x="12" y="26" width="61" height="10" rx="1" fill="#00ADB5" opacity="0.25" />
+      <text x="16" y="33" fontSize="4" fill="#00ADB5">
         # sector-b-north
       </text>
       <rect x="12" y="38" width="61" height="10" rx="1" fill="#1e293b" />

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatMessage, Family } from '@/types';
+import type { AidDistribution, ChatMessage, Family } from '@/types';
 import { chatStream, chat } from '@/services/ollama';
 import { ragAnswerStream } from '@/services/rag';
 import { wikipediaContext } from '@/services/webSearch';
@@ -90,7 +90,39 @@ function sanitizeForPrompt(s: unknown, maxLen = 200): string {
     .slice(0, maxLen);
 }
 
-function buildInlineContext(family: Family): string {
+/**
+ * Format a single distribution row into a one-line summary suitable for the
+ * inline context block. Date is the delivery date if available, otherwise the
+ * created date. Items are truncated so a long order doesn't blow past Gemma 4's
+ * small context. Notes are sanitized to strip control chars / backticks.
+ */
+function summarizeDistribution(d: AidDistribution): string {
+  const when = (d.delivered_at ?? d.created_at ?? '').slice(0, 10) || 'unknown';
+  const items =
+    d.items_distributed && d.items_distributed.length
+      ? d.items_distributed
+          .slice(0, 8)
+          .map(
+            (i) =>
+              `${sanitizeForPrompt(i.item_name, 40)}×${Math.max(0, Math.floor(i.quantity))}`
+          )
+          .join(', ') +
+        (d.items_distributed.length > 8
+          ? `, +${d.items_distributed.length - 8} more`
+          : '')
+      : '(no items recorded)';
+  const order = d.order_number ? `ORD-${String(d.order_number).padStart(3, '0')}` : d.distribution_id.slice(0, 12);
+  const by = d.delivered_by ?? d.assigned_to ?? d.distributed_by ?? '—';
+  const reason = d.failure_reason
+    ? ` reason="${sanitizeForPrompt(d.failure_reason, 80)}"`
+    : '';
+  return `${when} ${d.status} ${order} by=${sanitizeForPrompt(by, 40)} items=[${items}]${reason}`;
+}
+
+function buildInlineContext(
+  family: Family,
+  history: AidDistribution[] = []
+): string {
   const items = family.recommended_items ?? [];
   const itemList =
     items.length > 0
@@ -104,13 +136,37 @@ function buildInlineContext(family: Family): string {
   const meds = family.medical_conditions.length
     ? family.medical_conditions.map((c) => sanitizeForPrompt(c, 80)).join('; ')
     : 'none';
+  // Sort newest-first so the model's anchor "latest delivery" lands on row 1.
+  // Cap at 10 rows so a long-running family doesn't blow Gemma 4's context.
+  const sortedHistory = [...history].sort((a, b) => {
+    const ta = (a.delivered_at ?? a.created_at ?? '').localeCompare(
+      b.delivered_at ?? b.created_at ?? ''
+    );
+    return -ta;
+  });
+  const truncated = sortedHistory.slice(0, 10);
+  const historyLines =
+    truncated.length === 0
+      ? '(no distributions on record yet)'
+      : truncated
+          .map((d, i) => `  ${i + 1}. ${summarizeDistribution(d)}`)
+          .join('\n');
+  const total = sortedHistory.length;
+  const delivered = sortedHistory.filter((d) => d.status === 'delivered').length;
+  const lastAid = family.last_aid_at
+    ? sanitizeForPrompt(family.last_aid_at.slice(0, 10), 20)
+    : '(never)';
   return [
     `[FAMILY CONTEXT — current state, treat as ground truth]`,
     `family_id=${sanitizeForPrompt(family.family_id, 40)}; head=${sanitizeForPrompt(family.head_name, 80)}; sector=${sanitizeForPrompt(family.location_sector, 40)}`,
     `members=${family.member_count}; children<5=${family.children_under_5}; elderly=${family.elderly_count}; pregnant=${family.has_pregnant_member}; displacement=${sanitizeForPrompt(family.displacement_status, 40)}; income=${sanitizeForPrompt(family.income_level, 40)}`,
     `medical_conditions: ${meds}`,
     `current_need_items: ${itemList}`,
-    `When the user asks to remove or reference an item, the EXACT items present are listed above in current_need_items. Do not deny their existence.`,
+    `last_aid_at=${lastAid}; total_distributions=${total}; delivered=${delivered}`,
+    `recent_distributions (newest first, up to 10):`,
+    historyLines,
+    `When the user asks about past deliveries, history, when the family last received aid, what items were given, who delivered them, or any historical question — the EXACT records are listed above. Do not say you have no access; cite the rows directly.`,
+    `When the user asks to remove or reference a need item, the EXACT items present are listed above in current_need_items. Do not deny their existence.`,
   ].join('\n');
 }
 
@@ -118,6 +174,15 @@ interface AIChatProps {
   systemPrompt?: string;
   initialMessages?: ChatMessage[];
   enableRag?: boolean;
+  /**
+   * When true, the "Search knowledge base" toggle is forced ON and disabled,
+   * so every question is automatically answered against the uploaded PDFs.
+   * Only meaningful when `enableRag` is also true. Used by the Knowledge
+   * Base page where searching the library is the entire point — but kept
+   * off elsewhere (family chat, general assistant) so users keep manual
+   * control over when their question hits the KB.
+   */
+  forceRag?: boolean;
   enableWiki?: boolean;
   placeholder?: string;
   contextLabel?: string;
@@ -129,17 +194,27 @@ interface AIChatProps {
    * under any assistant message that proposes mutations.
    */
   family?: Family;
+  /**
+   * Distribution history for the family-scoped chat. Embedded in the inline
+   * context so questions like "when was the last delivery?" get answered
+   * from the actual ground truth rather than the model's "I don't have
+   * access" hallucination. The chat ALSO re-fetches the freshest history
+   * from Dexie at send time so a delivery that just landed is reflected.
+   */
+  history?: AidDistribution[];
 }
 
 export default function AIChat({
   systemPrompt,
   initialMessages = [],
   enableRag = true,
+  forceRag = false,
   enableWiki = true,
   placeholder,
   contextLabel,
   flex = true,
   family,
+  history,
 }: AIChatProps) {
   const { t } = useTranslation();
   const language = useSettingsStore((s) => s.language);
@@ -147,7 +222,10 @@ export default function AIChat({
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [thinking, setThinking] = useState(false);
-  const [useRag, setUseRag] = useState(false);
+  // When `forceRag` is set, the toggle is permanently on and disabled —
+  // initial state matches so the rest of the send pipeline behaves
+  // consistently from the first message.
+  const [useRag, setUseRag] = useState(forceRag);
   const [useWiki, setUseWiki] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Tracks the lifecycle of each AI-proposed family action by message index.
@@ -191,6 +269,7 @@ export default function AIChat({
     // We RE-FETCH the family from Dexie to guarantee we have the freshest
     // persisted data, eliminating any stale-React-prop edge case.
     let freshFamily: Family | undefined = family;
+    let freshHistory: AidDistribution[] = history ?? [];
     if (family) {
       try {
         const latest = await db.families.get(family.family_id);
@@ -214,9 +293,21 @@ export default function AIChat({
       } catch {
         // If the DB read fails for any reason, fall back to the prop.
       }
+      // Re-fetch the freshest distribution history so questions like
+      // "when was the last delivery?" reflect deliveries that completed
+      // since the page first rendered.
+      try {
+        const rows = await db.distributions
+          .where('family_id')
+          .equals(family.family_id)
+          .toArray();
+        freshHistory = rows;
+      } catch {
+        // fall back to whatever the prop carried
+      }
     }
     const contextHeader = freshFamily
-      ? buildInlineContext(freshFamily)
+      ? buildInlineContext(freshFamily, freshHistory)
       : '';
     const augmentedContent = contextHeader
       ? `${contextHeader}\n\nUSER REQUEST: ${trimmed}`
@@ -303,7 +394,7 @@ export default function AIChat({
       }
 
       // ---- Step 2: dispatch on whether RAG is requested ----
-      if (enableRag && useRag) {
+      if (enableRag && (forceRag || useRag)) {
         // The dedicated RAG path retrieves PDF chunks and asks Gemma 4 with citations.
         // We append Wikipedia context to the question so Gemma sees both.
         const augmentedQuestion = wikiBlock
@@ -471,11 +562,29 @@ export default function AIChat({
       <div className="border-t border-slate-700 p-3 space-y-2">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
           {enableRag && (
-            <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+            <label
+              className={`flex items-center gap-2 text-xs ${
+                forceRag
+                  ? 'text-slate-300 cursor-not-allowed'
+                  : 'text-slate-400 cursor-pointer'
+              }`}
+              title={
+                forceRag
+                  ? (t('assistant.use_rag_locked') ??
+                    'Knowledge-base search is always on for this page.')
+                  : undefined
+              }
+            >
               <input
                 type="checkbox"
-                checked={useRag}
-                onChange={(e) => setUseRag(e.target.checked)}
+                checked={forceRag ? true : useRag}
+                onChange={(e) => {
+                  // Forced mode: ignore user input — checkbox is read-only.
+                  if (forceRag) return;
+                  setUseRag(e.target.checked);
+                }}
+                disabled={forceRag}
+                aria-readonly={forceRag || undefined}
                 className="accent-ai"
               />
               <BookOpen size={14} />

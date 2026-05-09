@@ -52,15 +52,29 @@ export default function Settings() {
 
       <Card title={t('settings.language')}>
         <LanguageSwitcher />
-        <label className="mt-4 flex items-center gap-2 text-sm cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.darkMode}
-            onChange={(e) => settings.setDarkMode(e.target.checked)}
-            className="accent-brand"
-          />
-          {t('settings.dark_mode')}
-        </label>
+        <div className="mt-5 pt-4 border-t border-slate-700 space-y-2">
+          <div className="text-xs text-slate-400 font-medium uppercase tracking-wider">
+            {t('settings.appearance') ?? 'Appearance'}
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {(['light', 'dark', 'system'] as const).map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => settings.setTheme(opt)}
+                className={`touch-target px-3 py-2 rounded-lg text-sm border transition-colors ${
+                  settings.theme === opt
+                    ? 'bg-brand text-white border-brand'
+                    : 'bg-surface-deep border-slate-700 hover:bg-surface-light text-slate-200'
+                }`}
+                aria-pressed={settings.theme === opt}
+              >
+                {t(`theme.${opt}`) ??
+                  (opt === 'light' ? 'Light' : opt === 'dark' ? 'Dark' : 'System')}
+              </button>
+            ))}
+          </div>
+        </div>
       </Card>
 
       <Card title={t('settings.ai_section')}>
@@ -124,6 +138,39 @@ export default function Settings() {
           <Trash2 size={14} />
           {t('settings.reset_demo')}
         </button>
+      </Card>
+
+      {/* Attribution + non-affiliation notice — required by the Gemma model
+          variant naming & attribution guidelines (see /uploads/External_
+          Gemma_Model_Variant_Guidelines.pdf). The trademark line is the
+          one Google specifies verbatim; the non-affiliation sentence
+          clarifies that AidFlow Pro is independently built. */}
+      <Card title={t('settings.about') ?? 'About'}>
+        <div className="space-y-2 text-sm text-slate-300 leading-relaxed">
+          <p>
+            <strong>AidFlow Pro</strong> v1.0.0 —{' '}
+            {t('settings.about_tagline') ??
+              'AI-powered humanitarian aid distribution platform, built for the Gemma 4 Good Hackathon.'}
+          </p>
+          <p className="text-xs text-slate-400">
+            {t('settings.about_model') ??
+              'Inference is powered by Gemma 4 E4B running locally via Ollama. Embeddings (when available) use nomic-embed-text. The app is fully offline-first; no family data ever leaves the device.'}
+          </p>
+          <div className="pt-3 mt-3 border-t border-slate-700 text-xs text-slate-400 space-y-1">
+            <p>
+              {t('settings.gemma_trademark') ??
+                'Gemma is a trademark of Google LLC.'}
+            </p>
+            <p>
+              {t('settings.about_disclaimer') ??
+                'AidFlow Pro is independently developed and is not affiliated with, endorsed by, or sponsored by Google.'}
+            </p>
+            <p>
+              {t('settings.about_license') ??
+                'AidFlow Pro source: MIT License. Gemma model weights: governed by Google\'s Gemma Terms of Use.'}
+            </p>
+          </div>
+        </div>
       </Card>
     </div>
   );

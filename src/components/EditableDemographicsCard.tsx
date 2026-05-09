@@ -164,18 +164,29 @@ export default function EditableDemographicsCard({ family }: { family: Family })
               className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
             />
           </Field>
-          <Field label={t('families_edit.sector')} required>
-            <input
+          <Field label={t('families_edit.sector') ?? 'Location sector'} required>
+            <select
               value={sector}
               onChange={(e) => setSector(e.target.value)}
-              list="sector-suggestions"
               className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
-            />
-            <datalist id="sector-suggestions">
+            >
+              {/* Closed-set picker. The current value is always selectable
+                  (even if it's somehow not in the live sectors list — e.g.
+                  the family was created with a now-removed sector). */}
+              {sectors.length === 0 && sector === '' && (
+                <option value="" disabled>
+                  — no sectors defined —
+                </option>
+              )}
+              {sector && !sectors.includes(sector) && (
+                <option value={sector}>{sector}</option>
+              )}
               {sectors.map((s) => (
-                <option key={s} value={s} />
+                <option key={s} value={s}>
+                  {s}
+                </option>
               ))}
-            </datalist>
+            </select>
           </Field>
           <div className="grid grid-cols-2 gap-2">
             <Field label={t('families_edit.street')}>

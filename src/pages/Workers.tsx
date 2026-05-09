@@ -7,7 +7,7 @@
 // Each worker has a first name, last name, and position. Phone / notes are
 // optional. The internal `id` (W-...) is hidden from the user.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   UserCircle,
@@ -18,6 +18,8 @@ import {
   Save,
   X,
   Phone,
+  Mail,
+  MapPin,
   StickyNote,
   Briefcase,
   AlertTriangle,
@@ -41,8 +43,14 @@ const POSITIONS: WorkerPosition[] = [
 ];
 
 function newWorkerId(): string {
-  // Short timestamp-based id; the user never sees this.
-  return `W-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
+  // Timestamp + 10 random base-36 chars (~60 bits of entropy after the ms
+  // prefix). Enough for bulk imports in the same millisecond without
+  // collision; previous 3-char suffix could collide on synchronous adds.
+  const rand =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID().replace(/-/g, '').slice(0, 10)
+      : Math.random().toString(36).slice(2, 12).padEnd(10, '0');
+  return `W-${Date.now().toString(36)}-${rand}`;
 }
 
 export default function Workers() {
@@ -53,14 +61,20 @@ export default function Workers() {
       db.workers
         .toArray()
         .then((rows) =>
-          rows.sort((a, b) =>
-            `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`)
-          )
+          // Hide soft-deleted workers from the page; they remain in the DB so
+          // historic distribution rows can still resolve their names.
+          rows
+            .filter((w) => !w.deleted_at)
+            .sort((a, b) =>
+              `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`)
+            )
         ),
     []
   ) ?? [];
 
   // Active distributions tell us which workers are currently busy or assigned.
+  // We keep both `pending` and `out_for_delivery` so the delete guard can warn
+  // about pending assignments too (not just dispatched ones).
   const activeDistributions =
     useLiveQuery(
       () =>
@@ -71,30 +85,8 @@ export default function Workers() {
       []
     ) ?? [];
 
-  const allDistributions = useLiveQuery(() => db.distributions.toArray()) ?? [];
-
-  // Per-worker stats: assigned (pending+out), delivered, failed.
-  const stats = useMemo(() => {
-    const map = new Map<
-      string,
-      { assigned: number; out: number; delivered: number; failed: number; total: number }
-    >();
-    for (const w of workers) {
-      map.set(w.id, { assigned: 0, out: 0, delivered: 0, failed: 0, total: 0 });
-    }
-    for (const d of allDistributions) {
-      const wid = d.assigned_to ?? d.delivered_by;
-      if (!wid || !map.has(wid)) continue;
-      const s = map.get(wid)!;
-      s.total++;
-      if (d.status === 'out_for_delivery') s.out++;
-      if (d.status === 'pending' || d.status === 'out_for_delivery') s.assigned++;
-      if (d.status === 'delivered') s.delivered++;
-      if (d.status === 'failed') s.failed++;
-    }
-    return map;
-  }, [workers, allDistributions]);
-
+  // `busyByWorkerId` covers OUT_FOR_DELIVERY only — used for the on-card
+  // "Out for delivery" badge and to block dispatch elsewhere.
   const busyByWorkerId = useMemo(() => {
     const map = new Map<string, AidDistribution>();
     for (const d of activeDistributions) {
@@ -105,10 +97,30 @@ export default function Workers() {
     return map;
   }, [activeDistributions]);
 
+  // `activeAssignmentsByWorkerId` includes PENDING — used by the delete-confirm
+  // modal so we can warn about pending orders that would be orphaned. A worker
+  // with any active (pending OR out_for_delivery) order is blocked from delete.
+  const activeAssignmentsByWorkerId = useMemo(() => {
+    const map = new Map<string, AidDistribution[]>();
+    for (const d of activeDistributions) {
+      const wid = d.assigned_to;
+      if (!wid) continue;
+      const list = map.get(wid);
+      if (list) list.push(d);
+      else map.set(wid, [d]);
+    }
+    return map;
+  }, [activeDistributions]);
+
   const [search, setSearch] = useState('');
   const [positionFilter, setPositionFilter] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
+  // In-app delete-confirm modal state. null = closed; otherwise tracks the
+  // worker we're about to delete + a deleting flag so we can show feedback.
+  const [deleteTarget, setDeleteTarget] = useState<Worker | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletingNow, setDeletingNow] = useState(false);
 
   const filtered = useMemo(() => {
     let list = workers;
@@ -120,7 +132,9 @@ export default function Workers() {
           w.first_name.toLowerCase().includes(q) ||
           w.last_name.toLowerCase().includes(q) ||
           w.position.toLowerCase().includes(q) ||
-          w.phone?.toLowerCase().includes(q)
+          w.phone?.toLowerCase().includes(q) ||
+          w.email?.toLowerCase().includes(q) ||
+          w.address?.toLowerCase().includes(q)
       );
     }
     return list;
@@ -201,7 +215,6 @@ export default function Workers() {
               key={w.id}
               worker={w}
               busyOrder={busyByWorkerId.get(w.id)}
-              stats={stats.get(w.id)}
               isEditing={editing === w.id}
               onStartEdit={() => setEditing(w.id)}
               onCancelEdit={() => setEditing(null)}
@@ -210,17 +223,184 @@ export default function Workers() {
                 setEditing(null);
               }}
               onDelete={async () => {
-                if (busyByWorkerId.has(w.id)) {
-                  alert(t('workers.cannot_delete_busy'));
-                  return;
-                }
-                if (!confirm(t('workers.confirm_delete', { name: `${w.first_name} ${w.last_name}` }))) return;
-                await db.workers.delete(w.id);
+                // Open the modal regardless. The modal itself surfaces
+                // whether the worker has any active orders (pending OR
+                // out_for_delivery) and disables the Delete button if so.
+                setDeleteError(null);
+                setDeleteTarget(w);
               }}
             />
           ))}
         </div>
       )}
+
+      {deleteTarget && (
+        <DeleteWorkerModal
+          worker={deleteTarget}
+          activeOrders={activeAssignmentsByWorkerId.get(deleteTarget.id) ?? []}
+          deleting={deletingNow}
+          error={deleteError}
+          onCancel={() => {
+            if (deletingNow) return;
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }}
+          onConfirm={async () => {
+            if (!deleteTarget) return;
+            setDeletingNow(true);
+            setDeleteError(null);
+            try {
+              // Soft-delete: tag the row with deleted_at so historic
+              // distribution rows can still resolve the worker's name.
+              // Hard-delete is reserved for workers who have no records
+              // at all (handled by the modal's button being disabled when
+              // active orders exist).
+              await db.workers.update(deleteTarget.id, {
+                deleted_at: new Date().toISOString(),
+              });
+              setDeleteTarget(null);
+            } catch (e) {
+              const raw = e instanceof Error ? e.message : String(e);
+              const prefix =
+                t('workers.delete_failed') ?? 'Could not delete the worker. ';
+              setDeleteError(prefix + raw);
+            } finally {
+              setDeletingNow(false);
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// =========================================================================
+// In-app delete-confirm modal — replaces the native browser confirm() so
+// the visual matches the app's dark-teal theme and we can show a friendly
+// "this worker is currently out for delivery" hint when applicable.
+// =========================================================================
+
+function DeleteWorkerModal({
+  worker,
+  activeOrders,
+  deleting,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  worker: Worker;
+  /** Pending or out_for_delivery orders assigned to this worker. */
+  activeOrders: AidDistribution[];
+  deleting: boolean;
+  error?: string | null;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const fullName = `${worker.first_name} ${worker.last_name}`.trim();
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const hasActive = activeOrders.length > 0;
+  const outForDelivery = activeOrders.some((o) => o.status === 'out_for_delivery');
+
+  // a11y: Escape closes, focus the cancel button on mount, lock body scroll.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !deleting) {
+        e.preventDefault();
+        onCancel();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    cancelRef.current?.focus();
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [deleting, onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-worker-title"
+      aria-describedby="delete-worker-body"
+      onClick={() => {
+        if (!deleting) onCancel();
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md bg-surface border border-priority-critical/40 rounded-xl shadow-2xl p-5 space-y-4"
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-full bg-priority-critical/15 text-priority-critical grid place-items-center flex-shrink-0">
+            <AlertTriangle size={20} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2
+              id="delete-worker-title"
+              className="text-base font-bold text-slate-100"
+            >
+              {t('workers.delete_title') ?? 'Delete worker?'}
+            </h2>
+            <p id="delete-worker-body" className="text-sm text-slate-300 mt-1">
+              {t('workers.delete_body', { name: fullName }) ??
+                `Are you sure you want to delete ${fullName}? This action cannot be undone.`}
+            </p>
+          </div>
+        </div>
+
+        {hasActive && (
+          <div
+            className="text-xs text-priority-medium bg-priority-medium/10 border border-priority-medium/30 rounded-lg px-3 py-2 flex items-start gap-2"
+            role="alert"
+          >
+            <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
+            <span>
+              {outForDelivery
+                ? t('workers.cannot_delete_busy') ??
+                  'This worker is currently out for delivery. Wait until the order is closed before deleting.'
+                : t('workers.cannot_delete_pending', {
+                    count: activeOrders.length,
+                  }) ??
+                  `This worker is assigned to ${activeOrders.length} pending order(s). Reassign or cancel them first.`}
+            </span>
+          </div>
+        )}
+
+        {error && !hasActive && (
+          <div
+            className="text-xs text-priority-critical bg-priority-critical/10 border border-priority-critical/30 rounded-lg px-3 py-2"
+            role="alert"
+          >
+            {error}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-slate-700">
+          <button
+            ref={cancelRef}
+            onClick={onCancel}
+            disabled={deleting}
+            className="touch-target px-4 py-2 bg-surface-light hover:bg-slate-600 disabled:opacity-50 text-slate-200 rounded-lg text-sm flex items-center gap-1"
+          >
+            <X size={14} /> {t('common.cancel')}
+          </button>
+          <button
+            onClick={() => void onConfirm()}
+            disabled={deleting || hasActive}
+            className="touch-target px-4 py-2 bg-priority-critical hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold flex items-center gap-1"
+          >
+            <Trash2 size={14} />
+            {deleting
+              ? t('common.saving') ?? 'Deleting…'
+              : t('workers.delete') ?? 'Delete'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -232,7 +412,6 @@ export default function Workers() {
 function WorkerCard({
   worker,
   busyOrder,
-  stats,
   isEditing,
   onStartEdit,
   onCancelEdit,
@@ -241,7 +420,6 @@ function WorkerCard({
 }: {
   worker: Worker;
   busyOrder?: AidDistribution;
-  stats?: { assigned: number; out: number; delivered: number; failed: number; total: number };
   isEditing: boolean;
   onStartEdit: () => void;
   onCancelEdit: () => void;
@@ -280,12 +458,34 @@ function WorkerCard({
         </div>
       </div>
 
-      {(worker.phone || worker.notes) && (
+      {(worker.phone || worker.email || worker.address || worker.notes) && (
         <div className="text-xs text-slate-300 space-y-1 border-t border-slate-700 pt-2.5">
           {worker.phone && (
             <div className="flex items-center gap-1.5">
-              <Phone size={11} className="text-slate-500" />
-              <span>{worker.phone}</span>
+              <Phone size={11} className="text-slate-500 flex-shrink-0" />
+              <a
+                href={`tel:${worker.phone}`}
+                className="hover:text-brand transition-colors truncate"
+              >
+                {worker.phone}
+              </a>
+            </div>
+          )}
+          {worker.email && (
+            <div className="flex items-center gap-1.5">
+              <Mail size={11} className="text-slate-500 flex-shrink-0" />
+              <a
+                href={`mailto:${worker.email}`}
+                className="hover:text-brand transition-colors truncate"
+              >
+                {worker.email}
+              </a>
+            </div>
+          )}
+          {worker.address && (
+            <div className="flex items-start gap-1.5">
+              <MapPin size={11} className="text-slate-500 mt-0.5 flex-shrink-0" />
+              <span className="line-clamp-2">{worker.address}</span>
             </div>
           )}
           {worker.notes && (
@@ -294,23 +494,6 @@ function WorkerCard({
               <span className="italic line-clamp-2">{worker.notes}</span>
             </div>
           )}
-        </div>
-      )}
-
-      {stats && stats.total > 0 && (
-        <div className="grid grid-cols-3 gap-2 border-t border-slate-700 pt-2.5 text-center">
-          <div>
-            <div className="text-base font-bold text-priority-medium">{stats.assigned}</div>
-            <div className="text-[10px] text-slate-500 uppercase">{t('workers.stat_assigned')}</div>
-          </div>
-          <div>
-            <div className="text-base font-bold text-priority-normal">{stats.delivered}</div>
-            <div className="text-[10px] text-slate-500 uppercase">{t('workers.stat_delivered')}</div>
-          </div>
-          <div>
-            <div className="text-base font-bold text-priority-critical">{stats.failed}</div>
-            <div className="text-[10px] text-slate-500 uppercase">{t('workers.stat_failed')}</div>
-          </div>
         </div>
       )}
 
@@ -349,6 +532,8 @@ function WorkerForm({
   const [lastName, setLastName] = useState('');
   const [position, setPosition] = useState<WorkerPosition>('Field Worker');
   const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -359,17 +544,66 @@ function WorkerForm({
       setError(t('workers.required_names'));
       return;
     }
+    // Light email validation — non-empty value must look like an address.
+    const trimmedEmail = email.trim();
+    if (trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setError(t('workers.invalid_email') ?? 'Email looks invalid.');
+      return;
+    }
+    // Soft duplicate guard — block exact (case-insensitive) matches on
+    // first_name + last_name + position. The compound index defined in
+    // database.ts (position+last_name+first_name) makes this a single
+    // indexed lookup. Soft-deleted rows are ignored so a recreated worker
+    // with the same name is still allowed.
+    const fnLower = firstName.trim().toLowerCase();
+    const lnLower = lastName.trim().toLowerCase();
+    const dup = await db.workers
+      .toArray()
+      .then((rows) =>
+        rows.find(
+          (w) =>
+            !w.deleted_at &&
+            w.first_name.toLowerCase() === fnLower &&
+            w.last_name.toLowerCase() === lnLower &&
+            w.position === position
+        )
+      );
+    if (dup) {
+      setError(
+        t('workers.duplicate_warning') ??
+          'A worker with this name and position already exists.'
+      );
+      return;
+    }
+    // Hard cap each text field at 80 chars at the persistence boundary so a
+    // pasted novel doesn't blow past Gemma 4's small context window when the
+    // worker name is embedded in the AI system prompt.
+    const cap = (s: string) => s.slice(0, 80);
     setSaving(true);
     try {
       await onSave({
         id: newWorkerId(),
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
+        first_name: cap(firstName.trim()),
+        last_name: cap(lastName.trim()),
         position,
-        phone: phone.trim() || undefined,
-        notes: notes.trim() || undefined,
+        phone: phone.trim() ? cap(phone.trim()) : undefined,
+        email: trimmedEmail ? cap(trimmedEmail) : undefined,
+        address: address.trim() ? cap(address.trim()) : undefined,
+        notes: notes.trim() ? notes.trim().slice(0, 500) : undefined,
         created_at: new Date().toISOString(),
       });
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      if (/ConstraintError/i.test(raw)) {
+        setError(
+          t('workers.duplicate_id') ??
+            'Could not save — please try again (id collision).'
+        );
+      } else {
+        setError(
+          (t('workers.save_failed') ?? 'Could not save the worker. ') + raw
+        );
+      }
     } finally {
       setSaving(false);
     }
@@ -385,6 +619,7 @@ function WorkerForm({
           <input
             value={firstName}
             onChange={(e) => setFirstName(e.target.value)}
+            maxLength={80}
             placeholder="e.g. Layla"
             className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
           />
@@ -396,6 +631,7 @@ function WorkerForm({
           <input
             value={lastName}
             onChange={(e) => setLastName(e.target.value)}
+            maxLength={80}
             placeholder="e.g. Othman"
             className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
           />
@@ -423,7 +659,33 @@ function WorkerForm({
           <input
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
+            maxLength={40}
             placeholder="+963-94-555-…"
+            className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1.5 font-medium">
+            {t('workers.email') ?? 'Email'}
+          </label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            maxLength={80}
+            placeholder="layla.othman@example.org"
+            className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="block text-xs text-slate-400 mb-1.5 font-medium">
+            {t('workers.address') ?? 'Address'}
+          </label>
+          <input
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            maxLength={80}
+            placeholder="e.g. 12 Olive Tree Lane, Damascus"
             className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
           />
         </div>
@@ -435,6 +697,7 @@ function WorkerForm({
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={2}
+            maxLength={500}
             placeholder={t('workers.notes_placeholder')}
             className="w-full bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-brand outline-none"
           />
@@ -484,16 +747,34 @@ function WorkerEditForm({
   const [lastName, setLastName] = useState(worker.last_name);
   const [position, setPosition] = useState<string>(worker.position);
   const [phone, setPhone] = useState(worker.phone ?? '');
+  const [email, setEmail] = useState(worker.email ?? '');
+  const [address, setAddress] = useState(worker.address ?? '');
   const [notes, setNotes] = useState(worker.notes ?? '');
+  const [error, setError] = useState<string | null>(null);
 
   const handleSave = async () => {
-    if (!firstName.trim() || !lastName.trim()) return;
+    setError(null);
+    if (!firstName.trim() || !lastName.trim()) {
+      setError(t('workers.required_names'));
+      return;
+    }
+    const trimmedEmail = email.trim();
+    if (trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setError(t('workers.invalid_email') ?? 'Email looks invalid.');
+      return;
+    }
+    // Hard cap each text field at 80 chars at the persistence boundary so a
+    // pasted novel doesn't blow past Gemma 4's small context window when the
+    // worker name is embedded in the AI system prompt.
+    const cap = (s: string) => s.slice(0, 80);
     await onSave({
-      first_name: firstName.trim(),
-      last_name: lastName.trim(),
-      position: position as WorkerPosition,
-      phone: phone.trim() || undefined,
-      notes: notes.trim() || undefined,
+      first_name: cap(firstName.trim()),
+      last_name: cap(lastName.trim()),
+      position: cap(position) as WorkerPosition,
+      phone: phone.trim() ? cap(phone.trim()) : undefined,
+      email: trimmedEmail ? cap(trimmedEmail) : undefined,
+      address: address.trim() ? cap(address.trim()) : undefined,
+      notes: notes.trim() ? notes.trim().slice(0, 500) : undefined,
     });
   };
 
@@ -506,12 +787,14 @@ function WorkerEditForm({
         <input
           value={firstName}
           onChange={(e) => setFirstName(e.target.value)}
+          maxLength={80}
           placeholder={t('workers.first_name')}
           className="bg-surface-deep border border-slate-700 rounded px-2 py-1.5 text-xs"
         />
         <input
           value={lastName}
           onChange={(e) => setLastName(e.target.value)}
+          maxLength={80}
           placeholder={t('workers.last_name')}
           className="bg-surface-deep border border-slate-700 rounded px-2 py-1.5 text-xs"
         />
@@ -533,7 +816,23 @@ function WorkerEditForm({
       <input
         value={phone}
         onChange={(e) => setPhone(e.target.value)}
+        maxLength={40}
         placeholder={t('workers.phone')}
+        className="w-full bg-surface-deep border border-slate-700 rounded px-2 py-1.5 text-xs"
+      />
+      <input
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        maxLength={80}
+        placeholder={t('workers.email') ?? 'Email'}
+        className="w-full bg-surface-deep border border-slate-700 rounded px-2 py-1.5 text-xs"
+      />
+      <input
+        value={address}
+        onChange={(e) => setAddress(e.target.value)}
+        maxLength={80}
+        placeholder={t('workers.address') ?? 'Address'}
         className="w-full bg-surface-deep border border-slate-700 rounded px-2 py-1.5 text-xs"
       />
       <textarea
@@ -541,8 +840,14 @@ function WorkerEditForm({
         onChange={(e) => setNotes(e.target.value)}
         placeholder={t('workers.notes')}
         rows={2}
+        maxLength={500}
         className="w-full bg-surface-deep border border-slate-700 rounded px-2 py-1.5 text-xs"
       />
+      {error && (
+        <div className="text-[11px] text-priority-critical bg-priority-critical/10 border border-priority-critical/30 rounded px-2 py-1" role="alert">
+          {error}
+        </div>
+      )}
       <div className="flex gap-2 pt-1">
         <button
           onClick={() => void handleSave()}

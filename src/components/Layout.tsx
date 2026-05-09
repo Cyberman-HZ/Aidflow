@@ -18,6 +18,7 @@ import {
 import { useState } from 'react';
 import ConnectivityBanner from './ConnectivityBanner';
 import LanguageSwitcher from './LanguageSwitcher';
+import ThemeToggle from './ThemeToggle';
 import { useAuthStore } from '@/stores/authStore';
 
 interface NavItem {
@@ -65,12 +66,28 @@ export default function Layout() {
           {open ? <X size={24} /> : <Menu size={24} />}
         </button>
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded bg-brand grid place-items-center">
+          <img
+            src="/logo.png"
+            alt="AidFlow Pro"
+            className="h-8 w-auto object-contain"
+            onError={(e) => {
+              // Fallback to the old letter tile if the file is missing
+              (e.currentTarget as HTMLImageElement).style.display = 'none';
+              (e.currentTarget.nextSibling as HTMLElement | null)?.style?.setProperty('display', 'grid');
+            }}
+          />
+          <div
+            className="w-7 h-7 rounded bg-brand grid place-items-center"
+            style={{ display: 'none' }}
+          >
             <span className="text-white font-bold">A</span>
           </div>
           <span className="font-semibold">{t('app.name')}</span>
         </div>
-        <LanguageSwitcher compact />
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <LanguageSwitcher compact />
+        </div>
       </header>
 
       <div className="flex-1 flex overflow-hidden">
@@ -81,7 +98,19 @@ export default function Layout() {
           }`}
         >
           <div className="hidden md:flex h-16 px-5 items-center border-b border-slate-700 gap-3">
-            <div className="w-9 h-9 rounded-lg bg-brand grid place-items-center shadow-lg shadow-brand/30">
+            <img
+              src="/logo.png"
+              alt="AidFlow Pro"
+              className="h-10 w-auto object-contain"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = 'none';
+                (e.currentTarget.nextSibling as HTMLElement | null)?.style?.setProperty('display', 'grid');
+              }}
+            />
+            <div
+              className="w-9 h-9 rounded-lg bg-brand grid place-items-center shadow-lg shadow-brand/30"
+              style={{ display: 'none' }}
+            >
               <span className="text-white font-bold text-lg">A</span>
             </div>
             <div>
@@ -100,7 +129,11 @@ export default function Layout() {
                   `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
                     isActive
                       ? 'bg-brand text-white shadow shadow-brand/20'
-                      : 'text-slate-300 hover:bg-surface-light hover:text-white'
+                      // Brand-tinted hover so the lift is visible in BOTH
+                      // light and dark mode (text-slate-100 resolves to navy
+                      // in light, near-white in dark — always readable on
+                      // a faint teal wash).
+                      : 'text-slate-300 hover:bg-brand/10 hover:text-slate-100'
                   }`
                 }
               >
@@ -116,8 +149,9 @@ export default function Layout() {
                   <div className="capitalize">{user.role.replace('_', ' ')}</div>
                 </div>
               )}
-              <div className="px-3 py-1 hidden md:block">
+              <div className="px-3 py-1 hidden md:flex items-center gap-2">
                 <LanguageSwitcher />
+                <ThemeToggle />
               </div>
               <button
                 onClick={handleSignOut}

@@ -180,12 +180,16 @@ export default function FamilyEditModal({
           ? { lat: Number(latStr), lng: Number(lngStr) }
           : undefined;
 
+      // Compute the id ONCE — the previous code generated it twice in the
+      // same submit (once inside the `existing ?? { family_id }` literal,
+      // once in the explicit override line below). Only the second call
+      // won, but timestamp-based ids waste a millisecond and make logs
+      // confusing. One call, reused.
+      const family_id = existing?.family_id ?? newFamilyId();
       // Build the family row preserving cached AI fields when editing.
       const family: Family = {
-        ...(existing ?? {
-          family_id: newFamilyId(),
-        }),
-        family_id: existing?.family_id ?? newFamilyId(),
+        ...(existing ?? { family_id }),
+        family_id,
         head_name: headName.trim(),
         member_count: memberCount,
         children_under_5: childrenUnder5,
@@ -373,7 +377,9 @@ export default function FamilyEditModal({
               >
                 {DISPLACEMENT_OPTIONS.map((opt) => (
                   <option key={opt} value={opt}>
-                    {opt.replace('_', ' ')}
+                    {/* Localized labels for closed-set enum values; falls
+                        back to the humanized enum when no translation. */}
+                    {t(`families_edit.displacement_${opt}`) ?? opt.replace('_', ' ')}
                   </option>
                 ))}
               </select>
@@ -386,7 +392,7 @@ export default function FamilyEditModal({
               >
                 {INCOME_OPTIONS.map((opt) => (
                   <option key={opt} value={opt}>
-                    {opt}
+                    {t(`families_edit.income_${opt}`) ?? opt}
                   </option>
                 ))}
               </select>
