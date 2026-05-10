@@ -40,7 +40,10 @@ export default function EditableDemographicsCard({ family }: { family: Family })
   const [street, setStreet] = useState(family.street ?? '');
   const [city, setCity] = useState(family.city ?? '');
 
-  const allFamilies = useLiveQuery(() => db.families.toArray()) ?? [];
+  // Excludes soft-deleted families from address-suggestion neighbours.
+  const allFamilies = useLiveQuery(
+    () => db.families.toArray().then((rows) => rows.filter((f) => !f.deleted_at))
+  ) ?? [];
   const sectors = useMemo(
     () =>
       Array.from(

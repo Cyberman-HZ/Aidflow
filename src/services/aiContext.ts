@@ -354,10 +354,7 @@ export function buildSystemPrompt(snap: AppSnapshot, opts: BuildOpts): string {
   ].join('\n');
 }
 
-/**
- * Compact briefing for the Dashboard's executive summary. Kept short because
- * Gemma 4's context window is small and the summary needs to render fast.
- */
-export function briefingFacts(snap: AppSnapshot): string {
-  return dashboardBlock(snap);
-}
+// briefingFacts() used to live here but had no remaining callers — the
+// Dashboard builds its own briefing inline via dashboardBlock(). Removed
+// to keep the module surface honest. dashboardBlock() is the public entry
+// point for any future consumers that need this shape.

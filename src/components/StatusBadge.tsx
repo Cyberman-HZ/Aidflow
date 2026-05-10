@@ -64,14 +64,6 @@ export default function StatusBadge({
   );
 }
 
-export const STATUS_LABELS = {
-  pending: 'Pending',
-  out_for_delivery: 'Out for delivery',
-  delivered: 'Delivered',
-  failed: 'Failed',
-  cancelled: 'Cancelled',
-} as const;
-
 /** Which statuses a given status is allowed to transition to. */
 export const ALLOWED_TRANSITIONS: Record<DistributionStatus, DistributionStatus[]> = {
   pending: ['out_for_delivery', 'cancelled'],

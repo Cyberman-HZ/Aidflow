@@ -51,6 +51,13 @@ export interface Family {
   last_medical_notes?: string;
   /** Free-text general notes captured by the field worker on the last delivery. */
   last_delivery_notes?: string;
+  /**
+   * Soft-delete timestamp. Set when the admin deletes the family.
+   * Filtering on this preserves historic AidDistribution.family_id
+   * references so audit trail and history grids stay coherent. Same
+   * pattern as Worker.deleted_at — never hard-delete.
+   */
+  deleted_at?: string;
 }
 
 export type DistributionStatus =

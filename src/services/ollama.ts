@@ -47,11 +47,24 @@ function getConfig() {
   };
 }
 
-async function withTimeout<T>(p: Promise<T>, ms = 60_000): Promise<T> {
-  return await Promise.race([
-    p,
-    new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`Ollama request timeout after ${ms}ms`)), ms)),
-  ]);
+/**
+ * Run `fn(signal)` with a timeout. The signal is wired through to the
+ * underlying fetch so that on timeout the network request is actually
+ * cancelled — without this, the old `Promise.race(p, sleep(ms))` design
+ * would reject the caller but leave the fetch running in the background.
+ * A hung Ollama could then accumulate stuck fetches until the tab closed.
+ */
+async function withTimeout<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  ms = 60_000
+): Promise<T> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fn(ac.signal);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---------- Health check --------------------------------------------------
@@ -59,7 +72,10 @@ async function withTimeout<T>(p: Promise<T>, ms = 60_000): Promise<T> {
 export async function pingOllama(): Promise<boolean> {
   try {
     const { baseUrl } = getConfig();
-    const r = await withTimeout(fetch(`${baseUrl}/api/tags`, { method: 'GET' }), 5_000);
+    const r = await withTimeout(
+      (signal) => fetch(`${baseUrl}/api/tags`, { method: 'GET', signal }),
+      5_000
+    );
     return r.ok;
   } catch {
     return false;
@@ -86,11 +102,12 @@ export async function chat(messages: ChatMessage[], opts: ChatOpts = {}): Promis
       num_predict: opts.maxTokens ?? 1024,
     },
   };
-  const res = await withTimeout(
+  const res = await withTimeout((signal) =>
     fetch(`${baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal,
     })
   );
   if (!res.ok) throw new Error(`Ollama chat failed: ${res.status} ${res.statusText}`);
@@ -176,11 +193,13 @@ export async function* chatStream(
 export async function embed(text: string): Promise<number[]> {
   const { baseUrl, embedModel } = getConfig();
   const res = await withTimeout(
-    fetch(`${baseUrl}/api/embeddings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: embedModel, prompt: text }),
-    }),
+    (signal) =>
+      fetch(`${baseUrl}/api/embeddings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: embedModel, prompt: text }),
+        signal,
+      }),
     30_000
   );
   if (!res.ok) throw new Error(`Embedding failed: ${res.status}`);

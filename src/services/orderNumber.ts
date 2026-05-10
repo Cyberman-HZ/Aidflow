@@ -21,15 +21,10 @@ function maxOrderNumber(rows: Pick<AidDistribution, 'order_number'>[]): number {
   return max;
 }
 
-/**
- * Read-only preview of the next order number. NOT safe under concurrent
- * creation — two callers may see the same max. Use
- * {@link addDistributionWithNextOrderNumber} for the atomic write path.
- */
-export async function nextOrderNumber(): Promise<number> {
-  const rows = await db.distributions.toArray();
-  return maxOrderNumber(rows) + 1;
-}
+// nextOrderNumber() (non-atomic preview) used to live here but every
+// caller has migrated to addDistributionWithNextOrderNumber which does
+// the read + write in a single Dexie 'rw' transaction. Removed to keep
+// only the race-safe write path on the public surface.
 
 /**
  * Atomically reserves the next sequential order_number AND inserts the row,

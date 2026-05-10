@@ -245,7 +245,10 @@ export default function Dashboard() {
 
   // Live queries — react to any DB change so the dashboard always reflects
   // current state (and the AI summary, when generated, uses the latest data).
-  const families = useLiveQuery(() => db.families.toArray(), []) ?? [];
+  const families = useLiveQuery(
+    () => db.families.toArray().then((rows) => rows.filter((f) => !f.deleted_at)),
+    []
+  ) ?? [];
   const distributions = useLiveQuery(() => db.distributions.toArray(), []) ?? [];
   const workers = useLiveQuery(() => db.workers.toArray(), []) ?? [];
 

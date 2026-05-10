@@ -21,8 +21,11 @@ const importSrc = (() => {
   try { return read('src/services/spreadsheetImport.ts'); }
   catch { return ''; }
 })();
+// The spreadsheet import wizard used to live in its own modal; it has been
+// folded into FamilyEditModal (Add family → Import spreadsheet inline
+// wizard), so the regex sniffs in 1f/1g now check that file instead.
 const modalSrc = (() => {
-  try { return read('src/components/SpreadsheetImportModal.tsx'); }
+  try { return read('src/components/FamilyEditModal.tsx'); }
   catch { return ''; }
 })();
 const familiesSrc = (() => {
@@ -85,19 +88,22 @@ expect(
   'xlsx is dynamically imported (lazy-loaded)'
 );
 
-// 1f. UI button is wired in Families.tsx.
+// 1f. The import wizard is wired into FamilyEditModal (Add family →
+//      Import spreadsheet → inline review of each row). The service is
+//      imported there; the wizard buttons + state live there too.
 expect(
-  /SpreadsheetImportModal/.test(familiesSrc) &&
-    /setImportOpen\(true\)/.test(familiesSrc),
-  'Families.tsx wires the SpreadsheetImportModal'
+  /from\s+['"]@\/services\/spreadsheetImport['"]/.test(modalSrc) &&
+    /parseSpreadsheet/.test(modalSrc) &&
+    /proposeColumnMapping/.test(modalSrc),
+  'FamilyEditModal wires the spreadsheet-import wizard'
 );
 
-// 1g. Modal locks body scroll & listens for Escape (a11y).
+// 1g. The wizard handles its file input + the in-form review flow. It
+//      doesn't need its own body-scroll lock because the parent modal
+//      provides that — we just check the input element exists.
 expect(
-  /document\.body\.style\.overflow\s*=\s*['"]hidden['"]/.test(modalSrc) &&
-    /['"]Escape['"]/.test(modalSrc) &&
-    /addEventListener\(\s*['"]keydown['"]/.test(modalSrc),
-  'SpreadsheetImportModal a11y: body-scroll lock + Escape handler'
+  /accept=.*\.csv/.test(modalSrc) && /fileInputRef/.test(modalSrc),
+  'FamilyEditModal exposes a CSV/XLSX file picker for the import wizard'
 );
 
 // =========================================================================
@@ -428,6 +434,14 @@ for (const lang of ['en', 'ar', 'fr', 'es']) {
 // =========================================================================
 // Summary
 // =========================================================================
+
+console.log(`\n--- ${passed + failed} tests, ${passed} passed, ${failed} failed ---`);
+if (failed > 0) process.exit(1);
+process.exit(0);
+ales/${lang}.json has import.button_label`);
+  expect(parsed.common?.next, `locales/${lang}.json has common.next`);
+  expect(parsed.common?.done, `locales/${lang}.json has common.done`);
+}
 
 console.log(`\n--- ${passed + failed} tests, ${passed} passed, ${failed} failed ---`);
 if (failed > 0) process.exit(1);

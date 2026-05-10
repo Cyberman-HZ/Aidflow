@@ -239,7 +239,9 @@ export default function FamilyEditModal({
 
   // Pull all existing sector names so the user can pick from what's already
   // in the database (avoids typos / sector fragmentation).
-  const allFamilies = useLiveQuery(() => db.families.toArray()) ?? [];
+  const allFamilies = useLiveQuery(
+    () => db.families.toArray().then((rows) => rows.filter((f) => !f.deleted_at))
+  ) ?? [];
   const existingSectors = useMemo(
     () =>
       Array.from(
@@ -918,7 +920,14 @@ export default function FamilyEditModal({
                   )
                 )
                   return;
-                await db.families.delete(existing.family_id);
+                // Soft-delete: tag the row with deleted_at so historic
+                // AidDistribution.family_id references stay coherent
+                // (audit trail, history grid, monthly reports). Same
+                // pattern as Workers. Live queries everywhere already
+                // filter out !!deleted_at.
+                await db.families.update(existing.family_id, {
+                  deleted_at: new Date().toISOString(),
+                });
                 onClose();
               }}
               className="touch-target px-3 py-2 hover:bg-priority-critical/10 hover:text-priority-critical text-slate-500 rounded-lg text-xs flex items-center gap-1"
@@ -970,11 +979,21 @@ export default function FamilyEditModal({
       aria-labelledby="family-edit-title"
       onClick={onClose}
     >
-      {formBody}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
+      >
+        {formBody}
+      </div>
     </div>
   );
 }
 
+// Local Field helper — matches the shape used by EditableDemographicsCard
+// so the inline labels render consistently. Defined inline (not imported)
+// because this file already has a heavy import block and we don't want a
+// shared component spanning multiple files for what's effectively
+// presentation glue.
 function Field({
   label,
   required,
@@ -986,7 +1005,7 @@ function Field({
 }) {
   return (
     <div>
-      <label className="block text-xs text-slate-400 mb-1.5 font-medium">
+      <label className="block text-[11px] text-slate-400 mb-1 font-medium">
         {label}
         {required && <span className="text-priority-critical"> *</span>}
       </label>

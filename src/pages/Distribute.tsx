@@ -197,7 +197,11 @@ function ActiveOrders() {
         .toArray(),
     []
   ) ?? [];
-  const families = useLiveQuery(() => db.families.toArray()) ?? [];
+  // Soft-deleted families stay in the DB so historic distributions can still
+  // resolve their family_id, but Distribute should never offer them again.
+  const families = useLiveQuery(
+    () => db.families.toArray().then((rows) => rows.filter((f) => !f.deleted_at))
+  ) ?? [];
   // Keep ALL workers (including soft-deleted) so workerMap can resolve historic
   // order assignments to a name. The Reassign dropdown receives a filtered
   // list (`activeWorkers`) so deleted workers can't be picked for new
@@ -813,7 +817,11 @@ function OrderCard({
 function DistributionWizard({ onCreated }: { onCreated: () => void }) {
   const { t } = useTranslation();
   const user = useAuthStore((s) => s.user);
-  const families = useLiveQuery(() => db.families.toArray()) ?? [];
+  // Soft-deleted families stay in the DB so historic distributions can still
+  // resolve their family_id, but Distribute should never offer them again.
+  const families = useLiveQuery(
+    () => db.families.toArray().then((rows) => rows.filter((f) => !f.deleted_at))
+  ) ?? [];
   // Exclude soft-deleted workers from the new-order dropdown. Deleted workers
   // remain in IndexedDB so historic orders can still resolve their names via
   // the parent's workerMap, but they should not be assignable to new orders.
@@ -2150,7 +2158,11 @@ function DistributionHistory() {
         .toArray(),
     []
   ) ?? [];
-  const families = useLiveQuery(() => db.families.toArray()) ?? [];
+  // Soft-deleted families stay in the DB so historic distributions can still
+  // resolve their family_id, but Distribute should never offer them again.
+  const families = useLiveQuery(
+    () => db.families.toArray().then((rows) => rows.filter((f) => !f.deleted_at))
+  ) ?? [];
   const workers = useLiveQuery(() => db.workers.toArray()) ?? [];
 
   const [sector, setSector] = useState('');

@@ -94,7 +94,9 @@ export default function Assistant() {
 
   // Live queries: any change to underlying tables triggers a re-render
   // and the system prompt is rebuilt automatically.
-  const families = useLiveQuery(() => db.families.toArray()) ?? [];
+  const families = useLiveQuery(
+    () => db.families.toArray().then((rows) => rows.filter((f) => !f.deleted_at))
+  ) ?? [];
   const distributions = useLiveQuery(() => db.distributions.toArray()) ?? [];
   const workers = useLiveQuery(() => db.workers.toArray()) ?? [];
   const documents = useLiveQuery(() => db.documents.toArray()) ?? [];

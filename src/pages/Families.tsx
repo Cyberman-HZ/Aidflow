@@ -53,7 +53,13 @@ export default function Families() {
     { mode: 'create' } | { mode: 'edit'; family: Family } | null
   >(null);
 
-  const families = useLiveQuery(() => db.families.toArray(), []) ?? [];
+  // Filter out soft-deleted families. Historic distributions can still
+  // reference deleted_at families via family_id, but the active list
+  // should only show living rows.
+  const families = useLiveQuery(
+    () => db.families.toArray().then((rows) => rows.filter((f) => !f.deleted_at)),
+    []
+  ) ?? [];
   // Pulled live so the priority score reflects delivery history (recent
   // successful deliveries lower the score, failed/cancelled raise it).
   const distributions = useLiveQuery(() => db.distributions.toArray(), []) ?? [];
