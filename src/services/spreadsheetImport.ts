@@ -186,11 +186,11 @@ async function parseXlsx(file: File): Promise<ParsedSpreadsheet> {
     throw new Error('No headers found in the XLSX. Make sure the first row is the column names.');
   }
   const dataRows = aoa.slice(1);
-  if (dataRows.length > MAX_IMPORT_ROWS) {
-    throw new Error(
-      `Spreadsheet has ${dataRows.length} rows; max is ${MAX_IMPORT_ROWS}. Split the file into smaller chunks.`
-    );
-  }
+  // Bug fix: count rows AFTER filtering blanks — same as the CSV path.
+  // Previously the XLSX path counted raw rows including trailing blanks,
+  // so a 1500-row XLSX with 600 blanks (a common "I deleted some rows
+  // and didn't save" shape) was rejected while the equivalent CSV
+  // imported fine.
   const rows: Record<string, string>[] = [];
   for (const r of dataRows) {
     const arr = r as unknown[];
@@ -202,6 +202,11 @@ async function parseXlsx(file: File): Promise<ParsedSpreadsheet> {
       if (cell.length > 0) anyNonEmpty = true;
     }
     if (anyNonEmpty) rows.push(out);
+  }
+  if (rows.length > MAX_IMPORT_ROWS) {
+    throw new Error(
+      `Spreadsheet has ${rows.length} rows; max is ${MAX_IMPORT_ROWS}. Split the file into smaller chunks.`
+    );
   }
   return {
     format: 'xlsx',
@@ -698,10 +703,11 @@ export function coerceRow(
         break;
       case 'displacement_status': {
         const v = coerceDisplacement(raw);
-        if (v !== 'resident' || /^(resident|host|stable|local)/i.test(raw)) {
-          family.displacement_status = v;
-        } else {
-          family.displacement_status = v;
+        family.displacement_status = v;
+        // Only warn if we silently fell back to the default ("resident")
+        // because the source value didn't match any known synonym.
+        const isExplicitlyResident = /^(resident|host|stable|local)/i.test(raw);
+        if (v === 'resident' && !isExplicitlyResident) {
           warnings.push(
             `Column "${col}" value "${raw}" mapped to "${v}" (default — value not recognized).`
           );
@@ -733,12 +739,15 @@ export function coerceRow(
     }
   }
 
-  // Cross-field validation / clamps.
+  // Cross-field validation. Previously this silently inflated
+  // member_count to children + elderly when they exceeded the total —
+  // that hid the spreadsheet's data error and gave the priority engine a
+  // bogus household size (worst case: a typo turning member_count from
+  // 7 to 1 became member_count = 8 after the "fix"). Treat it instead as
+  // a row-level validation error so the admin can fix it in the preview
+  // table or knowingly skip the row.
   if (family.children_under_5 + family.elderly_count > family.member_count) {
-    warnings.push(
-      `children_under_5 (${family.children_under_5}) + elderly_count (${family.elderly_count}) exceeded member_count (${family.member_count}); member_count raised to fit.`
-    );
-    family.member_count = family.children_under_5 + family.elderly_count;
+    errors.member_count = `children_under_5 (${family.children_under_5}) + elderly_count (${family.elderly_count}) exceeds member_count (${family.member_count}). Fix the source row before importing.`;
   }
 
   // Required: head_name.

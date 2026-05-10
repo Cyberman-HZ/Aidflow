@@ -21,10 +21,12 @@ import { Card } from '@/components/Card';
 import EmptyState from '@/components/EmptyState';
 import EmotionalSupportGenModal from '@/components/EmotionalSupportGenModal';
 import { decodeDataUrlText } from '@/services/emotionalSupportGen';
+import { useSettingsStore } from '@/stores/settingsStore';
 import type { KidsContent as KidsItem } from '@/types';
 
 export default function KidsContentPage() {
   const { t } = useTranslation();
+  const uiLang = useSettingsStore((s) => s.language);
   const [age, setAge] = useState<KidsItem['age_group'] | ''>('');
   const [lang, setLang] = useState<KidsItem['language'] | ''>('');
   const [genOpen, setGenOpen] = useState(false);
@@ -64,11 +66,17 @@ export default function KidsContentPage() {
         : file.type === 'application/pdf'
         ? 'pdf'
         : 'story';
+      const supportedLangs: KidsItem['language'][] = ['en', 'ar', 'fr', 'es'];
+      const fallbackLang = (
+        supportedLangs.includes(uiLang as KidsItem['language'])
+          ? (uiLang as KidsItem['language'])
+          : 'en'
+      );
       await db.kids.add({
         content_id: `K-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         title: file.name,
-        age_group: '6-10',
-        language: 'en',
+        age_group: (age || '8-11') as KidsItem['age_group'],
+        language: (lang || fallbackLang) as KidsItem['language'],
         type,
         data_url,
         mime: file.type,
@@ -96,9 +104,9 @@ export default function KidsContentPage() {
             className="bg-surface-deep border border-slate-700 rounded-lg px-3 py-2 text-sm touch-target"
           >
             <option value="">{t('kids.all_ages')}</option>
-            <option value="5-7">5–7</option>
-            <option value="8-11">8–11</option>
-            <option value="12-15">12–15</option>
+            <option value="5-7">5-7</option>
+            <option value="8-11">8-11</option>
+            <option value="12-15">12-15</option>
           </select>
           <select
             value={lang}
@@ -115,10 +123,7 @@ export default function KidsContentPage() {
             type="button"
             onClick={() => setGenOpen(true)}
             className="touch-target ms-auto px-3 py-2 bg-ai hover:bg-violet-600 rounded-lg text-sm flex items-center gap-2 font-semibold text-white"
-            title={t(
-              'kids.generate_tooltip',
-              'Use Gemma 4 to generate trauma-informed content in any supported language.'
-            )}
+            title={t('kids.generate_tooltip', 'Generate trauma-informed content')}
           >
             <Sparkles size={14} /> {t('kids.generate', 'Generate with AI')}
           </button>
@@ -172,12 +177,6 @@ export default function KidsContentPage() {
   );
 }
 
-// =========================================================================
-// Download helpers — turn a stored data URL back into a real file the
-// user can save to disk. Picks a sensible extension from the MIME type
-// and sanitizes the title for use as a filename.
-// =========================================================================
-
 function extensionForMime(mime: string): string {
   const m = (mime || '').toLowerCase();
   if (m === 'text/markdown') return 'md';
@@ -191,7 +190,6 @@ function extensionForMime(mime: string): string {
 }
 
 function sanitizeFilename(s: string): string {
-  // Strip path / control / Windows-illegal chars, collapse whitespace.
   return (
     s
       .replace(/[\\/:*?"<>|\x00-\x1f]+/g, ' ')
@@ -233,15 +231,6 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-// =========================================================================
-// Print-to-PDF — shared by stories and images. Builds a styled standalone
-// HTML page, opens it in a popup, and auto-fires window.print() so the
-// OS's "Save as PDF" destination kicks in. Same approach as the Dashboard
-// summary export and Knowledge Base translation export — zero new deps,
-// fully offline, real selectable text in the resulting file, RTL-correct
-// for Arabic content.
-// =========================================================================
-
 const escapeHtmlForPdf = (s: string): string =>
   (s ?? '')
     .replace(/&/g, '&amp;')
@@ -258,9 +247,6 @@ const formatInline = (s: string): string => {
   return html;
 };
 
-// Same minimal markdown converter used by the other print exports —
-// covers exactly what Gemma 4's templated content emits (## / ### / #
-// headings, "- " or "* " bullets, blank-line paragraph breaks).
 function mdToHtml(md: string): string {
   const lines = (md ?? '').split('\n');
   const out: string[] = [];
@@ -311,10 +297,6 @@ function buildItemPrintDoc(item: KidsItem): string {
   const listSidePadding =
     lang === 'ar' ? 'padding-right: 22px; padding-left: 0' : 'padding-left: 22px; padding-right: 0';
 
-  // Body shape depends on item type:
-  //   - image: data URL embedded directly into <img>, centered, capped at 80vh
-  //   - markdown: mdToHtml render
-  //   - plain text: pre-wrapped escape
   let bodyHtml: string;
   if (item.type === 'image') {
     bodyHtml = `
@@ -324,7 +306,6 @@ function buildItemPrintDoc(item: KidsItem): string {
   } else if (item.mime === 'text/markdown') {
     bodyHtml = mdToHtml(decodeDataUrlText(item.data_url));
   } else {
-    // text/plain or unknown — render as a single pre-wrapped paragraph
     const decoded = decodeDataUrlText(item.data_url);
     bodyHtml = `<p style="white-space: pre-wrap;">${escapeHtmlForPdf(decoded)}</p>`;
   }
@@ -332,8 +313,8 @@ function buildItemPrintDoc(item: KidsItem): string {
   const generated = new Date().toLocaleString();
   const generatedLabel: Record<string, string> = {
     en: 'Generated',
-    ar: 'تم الإنشاء',
-    fr: 'Généré le',
+    ar: 'Generated',
+    fr: 'Genere le',
     es: 'Generado',
   };
 
@@ -405,14 +386,14 @@ function buildItemPrintDoc(item: KidsItem): string {
       <span class="tag">${escapeHtmlForPdf(item.type)}</span>
     </div>
     <div class="meta" style="margin-top: 6px;">
-      ${escapeHtmlForPdf(generatedLabel[lang] ?? generatedLabel.en)} ${escapeHtmlForPdf(generated)} · AidFlow Pro
+      ${escapeHtmlForPdf(generatedLabel[lang] ?? generatedLabel.en)} ${escapeHtmlForPdf(generated)} - AidFlow Pro
     </div>
   </header>
   <main>
 ${bodyHtml}
   </main>
   <footer>
-    AidFlow Pro · Emotional Support library
+    AidFlow Pro - Emotional Support library
   </footer>
 </body>
 </html>`;
@@ -430,7 +411,7 @@ function printItemAsPdf(item: KidsItem): boolean {
       win.focus();
       win.print();
     } catch {
-      /* some browsers throw if the window was closed before print fires */
+      /* ignored */
     }
   };
   if (win.document.readyState === 'complete') {
@@ -441,16 +422,7 @@ function printItemAsPdf(item: KidsItem): boolean {
   return true;
 }
 
-/**
- * Per-card download. Routes by item type:
- *   - story / image  → print-to-PDF (one-page styled layout)
- *   - pdf            → direct download (already a PDF)
- *   - video          → direct download (PDFs can't carry video)
- * Returns false only if the popup was blocked while trying to print.
- */
 function downloadItem(item: KidsItem): boolean {
-  // Video and PDF download natively — PDFs are already PDFs, and video
-  // cannot be meaningfully embedded in a PDF (no inline playback).
   if (item.type === 'video' || item.type === 'pdf') {
     const blob = dataUrlToBlob(item.data_url);
     if (!blob) return false;
@@ -460,7 +432,6 @@ function downloadItem(item: KidsItem): boolean {
     );
     return true;
   }
-  // Story (text/*) and image → render through print-to-PDF.
   return printItemAsPdf(item);
 }
 
@@ -475,10 +446,6 @@ function KidsCard({
   const Icon = item.type === 'image' ? ImageIcon : item.type === 'video' ? Film : item.type === 'pdf' ? FileText : BookOpen;
   return (
     <article className="bg-surface border border-slate-700 rounded-xl overflow-hidden relative group">
-      {/* Floating action cluster — top-right of the card. Two clean
-          circular buttons with soft shadows: download (brand-teal on
-          hover) on the left, destructive delete (red on hover) on the
-          right. Same FAB style for visual consistency. */}
       <div className="absolute top-2 end-2 z-10 flex gap-1.5">
         <button
           type="button"
@@ -522,10 +489,6 @@ function KidsCard({
               className="prose-ai mt-2 max-h-72 overflow-y-auto pe-1"
               dir={item.language === 'ar' ? 'rtl' : 'ltr'}
             >
-              {/* Decode the data URL with UTF-8 awareness so Arabic /
-                  French / Spanish content displays correctly. Markdown
-                  payloads (text/markdown) render with formatting; plain
-                  text falls through to whitespace-pre-wrap. */}
               {item.mime === 'text/markdown' ? (
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {decodeDataUrlText(item.data_url)}
@@ -542,12 +505,6 @@ function KidsCard({
     </article>
   );
 }
-
-// =========================================================================
-// Inline confirmation modal — same a11y plumbing as the other in-app
-// modals: Escape closes when not deleting, focus jumps to Cancel on
-// mount, body scroll lock, ARIA dialog role.
-// =========================================================================
 
 function DeleteContentModal({
   item,
@@ -651,7 +608,7 @@ function DeleteContentModal({
           >
             <Trash2 size={12} />
             {deleting
-              ? t('common.deleting', 'Deleting…')
+              ? t('common.deleting', 'Deleting...')
               : t('kids.delete_confirm', 'Delete')}
           </button>
         </div>

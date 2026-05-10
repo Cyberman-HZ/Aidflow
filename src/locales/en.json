@@ -596,14 +596,6 @@
     "create": "Create family",
     "delete": "Delete family",
     "confirm_delete": "Delete the record for {{name}}? This cannot be undone.",
-    "sector_pick": "Pick a sector",
-    "sector_add_new": "Add new sector…",
-    "street": "Street address",
-    "street_placeholder": "e.g. 12 Olive Tree Lane",
-    "city": "City / town",
-    "city_placeholder": "e.g. Damascus",
-    "severity": "Severity",
-    "sector": "Location sector",
-    "pregnant_label": "Has a pregnant or nursing member"
+    "sector_pick": "Pick a sector"
   }
 }

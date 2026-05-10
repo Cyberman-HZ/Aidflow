@@ -150,10 +150,23 @@ export async function resolveMissingAddresses(
     if (signal?.aborted) break;
 
     if (r) {
+      // Region fallback chain: city → state → country. Many US / CA / IN /
+      // BR markers reverse-geocode to (street + state + country) without
+      // a city — e.g. an unincorporated rural address. Previously we
+      // discarded the state entirely, leaving region blank and showing
+      // only the country, which made "Texas, USA" indistinguishable
+      // from "California, USA" in the UI. Falling through to state
+      // recovers a useful regional label without adding a new field.
+      const region =
+        r.city ||
+        (r as { state?: string }).state ||
+        p.region ||
+        r.country ||
+        '';
       const updates: Partial<StarlinkProvider> = {
         country: r.country || p.country,
         country_code: r.country_code || p.country_code,
-        region: r.city || p.region,
+        region,
         street: r.street ?? p.street,
         housenumber: r.housenumber ?? p.housenumber,
         suburb: r.suburb ?? p.suburb,

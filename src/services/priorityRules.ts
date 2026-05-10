@@ -109,9 +109,14 @@ export function computeRuleScore(
     reasons.push(`${family.medical_conditions.length} medical condition(s)`);
   }
 
-  const days = family.last_aid_at
+  // Clamp negative days to 0 so a future-dated last_aid_at (clock skew on
+  // a worker's tablet, sync from a different timezone, or a typo entered
+  // via the AI proposal flow) doesn't subtract from the score or render
+  // a nonsensical "−3 days without aid" label in the UI.
+  const rawDays = family.last_aid_at
     ? Math.floor((Date.now() - new Date(family.last_aid_at).getTime()) / 86_400_000)
     : 30;
+  const days = Math.max(0, rawDays);
   if (days >= 0 && days < 5) {
     // Multiplicative damping so the score visibly drops even for very vulnerable
     // families whose raw score would otherwise saturate at 100. Recovers over 5 days.

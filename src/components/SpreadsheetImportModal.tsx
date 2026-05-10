@@ -249,7 +249,6 @@ export default function SpreadsheetImportModal({
               onPick={onPick}
               fileInput={fileInput}
               file={file}
-              t={t}
             />
           )}
 
@@ -260,7 +259,6 @@ export default function SpreadsheetImportModal({
               proposing={mappingProposing}
               samplePreview={samplePreview}
               updateColumn={updateColumn}
-              t={t}
             />
           )}
 
@@ -269,12 +267,11 @@ export default function SpreadsheetImportModal({
               rows={coercedRows}
               selected={selected}
               setSelected={setSelected}
-              t={t}
             />
           )}
 
           {step === 'done' && importResult && (
-            <DoneStep result={importResult} t={t} />
+            <DoneStep result={importResult} />
           )}
         </div>
 
@@ -382,16 +379,15 @@ function UploadStep({
   onPick,
   fileInput,
   file,
-  t,
 }: {
   parsing: boolean;
   parseError: string | null;
   onDrop: (e: React.DragEvent) => void;
   onPick: (f: File) => void;
-  fileInput: React.RefObject<HTMLInputElement | null>;
+  fileInput: React.RefObject<HTMLInputElement>;
   file: File | null;
-  t: (k: string, ...args: unknown[]) => string;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-4">
       <div
@@ -444,15 +440,14 @@ function MappingStep({
   proposing,
   samplePreview,
   updateColumn,
-  t,
 }: {
   parsed: ParsedSpreadsheet;
   mapping: ColumnMapping | null;
   proposing: boolean;
   samplePreview: Record<string, string>;
   updateColumn: (col: string, value: string) => void;
-  t: (k: string, ...args: unknown[]) => string;
 }) {
+  const { t } = useTranslation();
   if (proposing || !mapping) {
     return (
       <div className="text-xs text-ai italic flex items-center gap-2 py-8 justify-center">
@@ -553,13 +548,12 @@ function ReviewStep({
   rows,
   selected,
   setSelected,
-  t,
 }: {
   rows: CoercedRow[];
   selected: Set<number>;
   setSelected: (s: Set<number>) => void;
-  t: (k: string, ...args: unknown[]) => string;
 }) {
+  const { t } = useTranslation();
   const validCount = rows.filter((r) => Object.keys(r.errors).length === 0).length;
   const errorCount = rows.length - validCount;
   const selectAllValid = () => {
@@ -695,11 +689,10 @@ function ReviewStep({
 
 function DoneStep({
   result,
-  t,
 }: {
   result: ImportResult;
-  t: (k: string, ...args: unknown[]) => string;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-3 py-4">
       <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-priority-normal/10 border border-priority-normal/30 text-priority-normal text-sm font-semibold">

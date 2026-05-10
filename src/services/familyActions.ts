@@ -266,9 +266,34 @@ export function parseFamilyActionsDetailed(text: string): ParseResult {
 /**
  * Returns the message text with action blocks removed so they don't appear
  * in the rendered chat bubble.
+ *
+ * Bug fix: previously this stripped EVERY fenced code block, including
+ * unrelated snippets the model emitted alongside its action proposal
+ * (e.g. a ```js example or a ```sh shell command). Now it only strips a
+ * block if EITHER:
+ *   (a) the block's language tag is "aidflow-action" / "json" / blank
+ *       AND the body parses as a valid FamilyAction via tryParseAction,
+ *   OR
+ *   (b) the body matches the inline action shape on its own.
+ * Anything else (a "js" snippet, a "shell" example, a markdown table)
+ * stays put so the user still sees the model's surrounding explanation.
  */
 export function stripFamilyActions(text: string): string {
-  return text.replace(ACTION_BLOCK_RE, '').replace(/\n{3,}/g, '\n\n').trim();
+  // Reset the global regex so successive calls don't drift.
+  ACTION_BLOCK_RE.lastIndex = 0;
+  return text
+    .replace(ACTION_BLOCK_RE, (whole, tag: string | undefined, body: string) => {
+      const t = (tag ?? '').trim().toLowerCase();
+      const looksLikeActionTag =
+        t === 'aidflow-action' || t === 'json' || t === '';
+      if (!looksLikeActionTag) return whole; // keep ```js etc.
+      const parsed = tryParseAction(body ?? '');
+      // Only strip if we actually parsed an action — avoids eating a
+      // ```json block of unrelated example data.
+      return parsed ? '' : whole;
+    })
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function validateFamilyAction(j: any): FamilyAction | null {

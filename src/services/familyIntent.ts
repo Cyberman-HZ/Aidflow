@@ -170,13 +170,23 @@ export function detectIntent(rawInput: string, family: Family): IntentResult {
   );
   if (addN) {
     const qty = parseInt(addN[1], 10);
-    const itemName = addN[2].trim();
+    const target = addN[2].trim();
+    // Canonicalise against the family's existing needs first — if the
+    // user types "add 5 bottles of water" and the family already has
+    // "drinking water (20L)", we want to MERGE on that existing chip
+    // rather than create a fragmented duplicate. Bug fix: previously we
+    // emitted the raw target verbatim, so the same logical need landed
+    // under multiple names ("water", "drinking water", "bottled water").
+    const existing = findItem(family, target);
+    const useName = existing ? existing.name : target;
     return {
       matched: true,
       actions: [
-        { type: 'add_recommended_item', item: itemName, quantity: qty },
+        { type: 'add_recommended_item', item: useName, quantity: qty },
       ],
-      reply: `Adding ${qty} × "${itemName}" to current needs.`,
+      reply: existing
+        ? `Adding ${qty} more to existing "${useName}".`
+        : `Adding ${qty} × "${useName}" to current needs.`,
     };
   }
 
@@ -185,13 +195,17 @@ export function detectIntent(rawInput: string, family: Family): IntentResult {
     /^(?:add\s+(?:another|one\s+more)|one\s+more)\s+(.+?)(?:\s+to.*)?$/i
   );
   if (addOne) {
-    const itemName = addOne[1].trim();
+    const target = addOne[1].trim();
+    const existing = findItem(family, target);
+    const useName = existing ? existing.name : target;
     return {
       matched: true,
       actions: [
-        { type: 'add_recommended_item', item: itemName, quantity: 1 },
+        { type: 'add_recommended_item', item: useName, quantity: 1 },
       ],
-      reply: `Adding 1 × "${itemName}" to current needs.`,
+      reply: existing
+        ? `Adding 1 more to existing "${useName}".`
+        : `Adding 1 × "${useName}" to current needs.`,
     };
   }
 

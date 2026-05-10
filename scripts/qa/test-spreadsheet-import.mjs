@@ -432,6 +432,3 @@ for (const lang of ['en', 'ar', 'fr', 'es']) {
 console.log(`\n--- ${passed + failed} tests, ${passed} passed, ${failed} failed ---`);
 if (failed > 0) process.exit(1);
 process.exit(0);
-ailed ---`);
-if (failed > 0) process.exit(1);
-process.exit(0);

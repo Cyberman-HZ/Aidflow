@@ -244,6 +244,7 @@ export async function* generateEmotionalSupportStream(opts: GenerateOpts): Async
   yield { kind: 'done', title, body };
 }
 
+
 // =========================================================================
 // UTF-8-safe data-url helpers — used both when saving newly-generated
 // content (admin's edited markdown can contain Arabic etc.) and by the

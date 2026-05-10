@@ -596,14 +596,6 @@
     "create": "Créer la famille",
     "delete": "Supprimer la famille",
     "confirm_delete": "Supprimer la fiche de {{name}} ? Action irréversible.",
-    "sector_pick": "Choisir un secteur",
-    "sector_add_new": "Ajouter un nouveau secteur…",
-    "street": "Adresse",
-    "street_placeholder": "ex. 12 rue des Oliviers",
-    "city": "Ville",
-    "city_placeholder": "ex. Damas",
-    "severity": "Gravité",
-    "sector": "Secteur",
-    "pregnant_label": "Membre enceinte ou allaitante"
+    "sector_pick": "Choisir un secteur"
   }
 }

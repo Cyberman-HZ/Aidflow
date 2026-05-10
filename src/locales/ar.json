@@ -596,14 +596,6 @@
     "create": "إنشاء عائلة",
     "delete": "حذف العائلة",
     "confirm_delete": "حذف سجل {{name}}؟ لا يمكن التراجع.",
-    "sector_pick": "اختر قطاعاً",
-    "sector_add_new": "إضافة قطاع جديد…",
-    "street": "عنوان الشارع",
-    "street_placeholder": "مثال: شارع الزيتون رقم 12",
-    "city": "المدينة / البلدة",
-    "city_placeholder": "مثال: دمشق",
-    "severity": "الشدة",
-    "sector": "القطاع",
-    "pregnant_label": "يوجد فرد حامل أو مرضع"
+    "sector_pick": "اختر قطاعاً"
   }
 }

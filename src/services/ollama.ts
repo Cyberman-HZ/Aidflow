@@ -116,33 +116,58 @@ export async function* chatStream(
       num_predict: opts.maxTokens ?? 1024,
     },
   };
+  // AbortController-backed safety net: if the model never emits any
+  // tokens for a long stretch (Ollama crashed mid-stream, model loop,
+  // network glitch on a flaky lab Wi-Fi), abort the read so the page
+  // can fall back gracefully instead of spinning forever. Reset on each
+  // delta — large generations are fine as long as SOMETHING comes
+  // through every IDLE_TIMEOUT_MS.
+  const ac = new AbortController();
+  const IDLE_TIMEOUT_MS = 90_000;
+  let idleTimer = setTimeout(() => ac.abort(), IDLE_TIMEOUT_MS);
   const res = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: ac.signal,
   });
-  if (!res.ok || !res.body) throw new Error(`Ollama stream failed: ${res.status}`);
+  if (!res.ok || !res.body) {
+    clearTimeout(idleTimer);
+    throw new Error(`Ollama stream failed: ${res.status}`);
+  }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-    for (const raw of lines) {
-      const line = raw.trim();
-      if (!line) continue;
-      try {
-        const obj = JSON.parse(line) as ChatResponse;
-        const delta = obj.message?.content;
-        if (delta) yield delta;
-        if (obj.done) return;
-      } catch {
-        // ignore non-JSON keep-alives
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) continue;
+        try {
+          const obj = JSON.parse(line) as ChatResponse;
+          const delta = obj.message?.content;
+          if (delta) {
+            // Refresh the idle timer on every delta we actually receive.
+            clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => ac.abort(), IDLE_TIMEOUT_MS);
+            yield delta;
+          }
+          if (obj.done) {
+            clearTimeout(idleTimer);
+            return;
+          }
+        } catch {
+          // ignore non-JSON keep-alives
+        }
       }
     }
+  } finally {
+    clearTimeout(idleTimer);
   }
 }
 

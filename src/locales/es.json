@@ -596,14 +596,6 @@
     "create": "Crear familia",
     "delete": "Eliminar familia",
     "confirm_delete": "¿Eliminar el registro de {{name}}? Acción irreversible.",
-    "sector_pick": "Elige un sector",
-    "sector_add_new": "Añadir nuevo sector…",
-    "street": "Dirección",
-    "street_placeholder": "p. ej. Calle de los Olivos 12",
-    "city": "Ciudad",
-    "city_placeholder": "p. ej. Damasco",
-    "severity": "Gravedad",
-    "sector": "Sector",
-    "pregnant_label": "Miembro embarazada o lactante"
+    "sector_pick": "Elige un sector"
   }
 }
