@@ -104,6 +104,14 @@ export interface KnowledgeDocument {
   chunks: KnowledgeChunk[];
   source_filename: string;
   file_size: number;
+  /**
+   * Original PDF binary stored on upload so the admin can re-download the
+   * source file later. Optional — not present for documents ingested before
+   * the blob-storage feature shipped, or for files larger than the per-PDF
+   * cap (see MAX_ORIGINAL_BLOB_BYTES in rag.ts).
+   */
+  original_blob?: Blob;
+  original_mime?: string;
 }
 
 export interface KnowledgeChunk {
@@ -118,7 +126,13 @@ export interface KnowledgeChunk {
 export interface KidsContent {
   content_id: string;
   title: string;
-  age_group: '0-5' | '6-10' | '11-15';
+  /**
+   * Age brackets are developmentally distinct: early childhood (5-7),
+   * middle childhood (8-11), early adolescence (12-15). Lower than 5 is
+   * intentionally not supported — material for under-5s needs caregiver
+   * mediation that the platform doesn't model.
+   */
+  age_group: '5-7' | '8-11' | '12-15';
   language: 'en' | 'ar' | 'fr' | 'es';
   type: 'image' | 'video' | 'pdf' | 'story';
   data_url: string;

@@ -10,7 +10,6 @@ import type {
   Worker,
   KidsContent,
   AidGuide,
-  BitchatMessage,
 } from '@/types';
 
 const now = () => new Date().toISOString();
@@ -350,7 +349,7 @@ const kids: KidsContent[] = [
   {
     content_id: 'K-001',
     title: 'Brave Little Lion (story)',
-    age_group: '0-5',
+    age_group: '5-7',
     language: 'en',
     type: 'story',
     data_url:
@@ -363,23 +362,9 @@ const kids: KidsContent[] = [
     uploaded_at: now(),
   },
   {
-    content_id: 'K-002',
-    title: 'Coloring Page — Rainbow',
-    age_group: '6-10',
-    language: 'en',
-    type: 'image',
-    data_url:
-      'data:image/svg+xml;base64,' +
-      btoa(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120"><path d="M10 110 A90 90 0 0 1 190 110" stroke="red" stroke-width="8" fill="none"/><path d="M20 110 A80 80 0 0 1 180 110" stroke="orange" stroke-width="8" fill="none"/><path d="M30 110 A70 70 0 0 1 170 110" stroke="yellow" stroke-width="8" fill="none"/><path d="M40 110 A60 60 0 0 1 160 110" stroke="green" stroke-width="8" fill="none"/><path d="M50 110 A50 50 0 0 1 150 110" stroke="blue" stroke-width="8" fill="none"/></svg>'
-      ),
-    mime: 'image/svg+xml',
-    uploaded_at: now(),
-  },
-  {
     content_id: 'K-003',
     title: 'Breathing Exercise (calm)',
-    age_group: '11-15',
+    age_group: '12-15',
     language: 'en',
     type: 'story',
     data_url:
@@ -436,46 +421,6 @@ const guides: AidGuide[] = [
   },
 ];
 
-const messages: BitchatMessage[] = [
-  {
-    msg_id: 'M-001',
-    channel: '#sector-b-north',
-    author: 'Pierre Lefevre',
-    author_id: '01a2b3c4d5e6f701',
-    body: 'Distribution complete at site 4. 12 families served.',
-    sent_at: daysAgo(0),
-    status: 'delivered',
-    delivered_via: 'bluetooth',
-    ttl: 6,
-    attempts: 1,
-  },
-  {
-    msg_id: 'M-002',
-    channel: '#sector-b-north',
-    author: 'Sarah Chen',
-    author_id: '01a2b3c4d5e6f702',
-    body: 'Acknowledged. Move to site 5 next.',
-    sent_at: daysAgo(0),
-    status: 'delivered',
-    delivered_via: 'bluetooth',
-    ttl: 7,
-    attempts: 1,
-  },
-  {
-    msg_id: 'M-003',
-    channel: '#medical-team',
-    author: 'Carmen Diaz',
-    author_id: '01a2b3c4d5e6f703',
-    body: 'Suspected cholera at F-0201. Need rehydration kits.',
-    sent_at: daysAgo(0),
-    status: 'queued',
-    delivered_via: 'queued',
-    ttl: 7,
-    attempts: 0,
-    failure_reason: 'no peer connected',
-  },
-];
-
 export async function seedIfEmpty(): Promise<void> {
   if (await isSeeded()) return;
   await db.transaction(
@@ -488,7 +433,6 @@ export async function seedIfEmpty(): Promise<void> {
       db.workers,
       db.kids,
       db.guides,
-      db.messages,
     ],
     async () => {
       await db.families.bulkAdd(families);
@@ -498,7 +442,6 @@ export async function seedIfEmpty(): Promise<void> {
       await db.workers.bulkAdd(workers);
       await db.kids.bulkAdd(kids);
       await db.guides.bulkAdd(guides);
-      await db.messages.bulkAdd(messages);
     }
   );
 }
@@ -547,6 +490,8 @@ export async function reseed(): Promise<void> {
         db.workers.clear(),
         db.kids.clear(),
         db.guides.clear(),
+        // Clear orphaned Bitchat messages from previous seed versions too,
+        // so a Reset Demo Data on an old install wipes them.
         db.messages.clear(),
       ]);
     }

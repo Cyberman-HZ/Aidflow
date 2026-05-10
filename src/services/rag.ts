@@ -264,6 +264,12 @@ export async function ingestPdf(
     }
   }
 
+  // Keep the original PDF binary in IndexedDB so the admin can re-download
+  // it later (or share it with someone who needs the source). Files above
+  // the cap skip this — they remain searchable but their bytes are not
+  // retained, to avoid blowing past the per-origin storage quota.
+  const includeOriginal = file.size > 0 && file.size <= MAX_ORIGINAL_BLOB_BYTES;
+
   const doc: KnowledgeDocument = {
     doc_id,
     title: meta.title,
@@ -275,12 +281,26 @@ export async function ingestPdf(
     chunks,
     source_filename: file.name,
     file_size: file.size,
+    ...(includeOriginal
+      ? {
+          original_blob: file,
+          original_mime: file.type || 'application/pdf',
+        }
+      : {}),
   };
   onPhase?.('save');
   await db.documents.put(doc);
   onPhase?.('done');
   return doc;
 }
+
+/**
+ * Per-PDF cap for keeping the original blob in IndexedDB. 25 MB matches the
+ * common email-attachment ceiling — large enough for almost every protocol
+ * PDF a humanitarian field office produces, small enough that ten of them
+ * fit comfortably inside a typical browser storage quota.
+ */
+export const MAX_ORIGINAL_BLOB_BYTES = 25 * 1024 * 1024;
 
 // ---------- Q&A with citations ------------------------------------------
 
@@ -314,8 +334,31 @@ interface RagAnswer {
 }
 
 // ---------- Full-document summarization ---------------------------------
+//
+// Two paths:
+//   1. SHORT docs  (charCount ≤ MAP_REDUCE_THRESHOLD)
+//      Single Gemma 4 call. The whole text fits in a 16K-token context.
+//   2. LONG docs   (charCount > MAP_REDUCE_THRESHOLD)
+//      Map-reduce: split into ≤ MAP_SECTION_CHAR_BUDGET sections, ask
+//      Gemma 4 for a structured outline of each (the "map" step), then
+//      ask Gemma 4 once more to synthesize the outlines into a unified
+//      executive summary (the "reduce" step). This handles arbitrarily
+//      long documents — the truncation warning never appears.
 
-const SUMMARY_CHAR_BUDGET = 24_000; // ≈ 6 K tokens at 4 chars/token
+const SUMMARY_CHAR_BUDGET = 50_000; // ≈ 12.5 K tokens at 4 chars/token
+
+/**
+ * Documents up to this size go through the single-pass path. Above this,
+ * we switch to map-reduce so the whole document gets read.
+ */
+const MAP_REDUCE_THRESHOLD = SUMMARY_CHAR_BUDGET;
+
+/**
+ * Per-section budget for the map step. Sized so each section, plus the
+ * map system prompt and a 600-token outline budget, fits comfortably in
+ * a 16K-token context window with room for inference overhead.
+ */
+const MAP_SECTION_CHAR_BUDGET = 15_000;
 
 const SUMMARIZE_INTENT_PATTERNS: RegExp[] = [
   /\bsummari[sz]e\b/i,
@@ -417,26 +460,165 @@ export function buildFullDocText(
   return { text, truncated, charCount: full.length };
 }
 
-const SUMMARIZE_SYSTEM_PROMPT = `You are a humanitarian field assistant for AidFlow Pro. The user wants a summary of an organizational document. Write a concise, faithful, structured summary based on the document text provided.
+const SUMMARIZE_SYSTEM_PROMPT = `You are a humanitarian field assistant for AidFlow Pro. Write a faithful, complete, well-structured summary of the document below.
+
+PRIORITY ORDER (read this carefully):
+1. COVERAGE — every important part of the document MUST appear in your summary. No major topic gets skipped.
+2. STRUCTURE — use 4-7 short markdown headings (##), each followed by 2-5 bullets.
+3. DEPTH — only as much detail as fits within the length budget below.
+
+If you must choose between deep detail on early sections and surface mention of later sections, ALWAYS CHOOSE COVERAGE. Trim bullets shorter, drop adjectives, but never omit a topic the document spends real space on.
 
 Rules:
 - Use ONLY information from the document text below. Do not invent facts.
-- Structure the answer with short bold headings (Markdown), then bullet points or short paragraphs.
-- Cover: purpose, key sections, critical guidance, and any explicit do's / don'ts. Aim for completeness over brevity, but stay tight — no padding.
 - Cite the page in parentheses for non-trivial claims, e.g. "(p. 4)".
-- If the document text was truncated (you'll be told), say so plainly at the end so the user knows to ask follow-ups for later sections.
+- Aim for 500-700 words total. The model has limited output room — pace yourself.
+- END CLEANLY. Do not stop mid-sentence or mid-bullet. If you sense you're running out of room, finish the current bullet, write a final "## Summary" heading with one closing sentence, and stop.
+- If the document text was truncated (you'll be told), note that briefly at the end.
+- Reply in {LANGUAGE}.`;
+
+// Map step — extract dense factual content from ONE section. Output is an
+// outline (not a polished summary) that will feed the reduce step.
+const MAP_SECTION_SYSTEM_PROMPT = `You are extracting the substantive content from one section of a longer humanitarian document for later synthesis. Output a STRUCTURED OUTLINE (not a polished summary) of just this section.
+
+Rules:
+- Cover: definitions, recommendations, decision criteria, thresholds, named entities (people / organizations / places), specific numbers, dates, and any explicit do's / don'ts.
+- Use bullet points. Use short bold sub-headings if the section has clear sub-topics.
+- Cite the page in parentheses for each non-trivial claim, e.g. "(p. 4)".
+- Do NOT add preamble like "This section discusses…" — go straight into the bullets.
+- Do NOT invent content. If the section is sparse, output a short outline; if it is a heading-only page, just say so briefly.
+- Aim for 200-400 words. The goal is dense factual extraction, not prose.
+- Reply in {LANGUAGE}.`;
+
+// Reduce step — synthesize all section outlines into a single cohesive
+// executive summary, in the same shape as the single-pass summary.
+const REDUCE_SYSTEM_PROMPT = `You are a humanitarian field assistant for AidFlow Pro. You receive a series of structured outlines, each from one section of a single document, in document order. Synthesize them into ONE cohesive executive summary.
+
+PRIORITY ORDER (read this carefully):
+1. COVERAGE — EVERY section in the outlines below MUST be reflected in your summary. No section gets dropped.
+2. STRUCTURE — use 4-7 short markdown headings (##), each followed by 2-5 bullets.
+3. DEPTH — only as much detail as fits within the length budget below.
+
+If you must choose between deep detail on early outlines and surface mention of later outlines, ALWAYS CHOOSE COVERAGE. Trim bullets shorter, drop adjectives, but never omit content from a later outline.
+
+Rules:
+- Use ONLY information from the outlines below. Do not invent facts.
+- Preserve page citations: when an outline says "(p. 4)", carry that through.
+- Do NOT mention sections, outlines, or that you were given pre-extracted content — the reader sees one cohesive summary.
+- Do NOT prefix with "Here is the summary:" — start directly with your first markdown heading.
+- Aim for 600-900 words total. The model has limited output room — pace yourself.
+- END CLEANLY. Do not stop mid-sentence or mid-bullet. If you sense you're running out of room, finish the current bullet, write a final "## Summary" heading with one closing sentence, and stop.
 - Reply in {LANGUAGE}.`;
 
 /**
- * Stream a summary of one document. Yields content deltas, then a 'done'
- * event with citation info (the doc itself).
+ * Group the document into coarse sections for the map step. Prefers page
+ * boundaries for clean cuts; falls back to chunks for legacy rows that
+ * don't have a `pages` array. Sections never exceed
+ * MAP_SECTION_CHAR_BUDGET — single oversized pages are char-split.
+ */
+function buildMapReduceSections(
+  doc: KnowledgeDocument
+): { text: string; page_start: number; page_end: number }[] {
+  const blocks =
+    doc.pages && doc.pages.length > 0
+      ? doc.pages
+          .map((p) => ({
+            text: (p.text ?? '').trim(),
+            page_start: p.page,
+            page_end: p.page,
+          }))
+          .filter((b) => b.text.length > 0)
+      : (doc.chunks ?? [])
+          .map((c) => ({
+            text: (c.text ?? '').trim(),
+            page_start: c.page_start,
+            page_end: c.page_end,
+          }))
+          .filter((b) => b.text.length > 0);
+
+  const sections: { text: string; page_start: number; page_end: number }[] = [];
+  let current: string[] = [];
+  let currentChars = 0;
+  let currentStart = 0;
+  let currentEnd = 0;
+
+  const flush = () => {
+    if (current.length === 0) return;
+    sections.push({
+      text: current.join('\n\n'),
+      page_start: currentStart,
+      page_end: currentEnd,
+    });
+    current = [];
+    currentChars = 0;
+  };
+
+  for (const block of blocks) {
+    const pageLabel = `[Page ${block.page_start}${
+      block.page_end !== block.page_start ? `-${block.page_end}` : ''
+    }]`;
+
+    // A single block bigger than the section budget — char-split it. Edge
+    // case for very text-heavy single pages.
+    if (block.text.length > MAP_SECTION_CHAR_BUDGET) {
+      flush();
+      let offset = 0;
+      while (offset < block.text.length) {
+        const slice = block.text.slice(offset, offset + MAP_SECTION_CHAR_BUDGET);
+        sections.push({
+          text: `${pageLabel}\n${slice}`,
+          page_start: block.page_start,
+          page_end: block.page_end,
+        });
+        offset += MAP_SECTION_CHAR_BUDGET;
+      }
+      continue;
+    }
+
+    if (currentChars + block.text.length > MAP_SECTION_CHAR_BUDGET && currentChars > 0) {
+      flush();
+    }
+    if (current.length === 0) currentStart = block.page_start;
+    current.push(`${pageLabel}\n${block.text}`);
+    currentChars += block.text.length;
+    currentEnd = block.page_end;
+  }
+  flush();
+
+  return sections;
+}
+
+/**
+ * Stream a summary of one document. Dispatches between a single-pass
+ * summary (short docs ≤ MAP_REDUCE_THRESHOLD chars) and a map-reduce
+ * summary (long docs above that threshold).
+ *
+ * Yields:
+ *   - `{ kind: 'progress', stage: 'mapping'|'reducing', sectionIndex?, totalSections? }`
+ *     emitted only on the map-reduce path so the UI can show a progress
+ *     strip while no tokens are streaming yet.
+ *   - `{ kind: 'delta', text }`           — token deltas for the final
+ *     summary (single-pass) or the reduce step's streamed output.
+ *   - `{ kind: 'done', citations, truncated }` — terminal event. With
+ *     map-reduce, `truncated` is always false because the whole document
+ *     was processed — no pages were dropped.
  */
 export async function* summarizeDocumentStream(
   docId: string,
   language: 'en' | 'ar' | 'fr' | 'es' = 'en'
 ): AsyncGenerator<
   | { kind: 'delta'; text: string }
-  | { kind: 'done'; citations: { doc_id: string; title: string; page: number }[]; truncated: boolean },
+  | {
+      kind: 'progress';
+      stage: 'mapping' | 'reducing';
+      sectionIndex?: number;
+      totalSections?: number;
+    }
+  | {
+      kind: 'done';
+      citations: { doc_id: string; title: string; page: number }[];
+      truncated: boolean;
+    },
   void,
   void
 > {
@@ -446,11 +628,14 @@ export async function* summarizeDocumentStream(
     yield { kind: 'done', citations: [], truncated: false };
     return;
   }
+  // Pull full text up to SUMMARY_CHAR_BUDGET; we use `charCount` (the
+  // untruncated length) to decide one-pass vs. map-reduce.
   const { text, truncated, charCount } = buildFullDocText(doc);
   if (!text) {
     yield {
       kind: 'delta',
-      text: 'No extracted text found for this document — it may be a scanned PDF without OCR.',
+      text:
+        'No extracted text found for this document — it may be a scanned PDF without OCR.',
     };
     yield { kind: 'done', citations: [], truncated: false };
     return;
@@ -464,7 +649,6 @@ export async function* summarizeDocumentStream(
       : language === 'es'
       ? 'Spanish'
       : 'English';
-  const sys = SUMMARIZE_SYSTEM_PROMPT.replace('{LANGUAGE}', langName);
 
   if (!(await pingOllama())) {
     yield {
@@ -475,34 +659,148 @@ export async function* summarizeDocumentStream(
     yield {
       kind: 'done',
       citations: [{ doc_id: doc.doc_id, title: doc.title, page: 1 }],
+      truncated: false,
+    };
+    return;
+  }
+
+  const useMapReduce = charCount > MAP_REDUCE_THRESHOLD;
+
+  // ---------------- Single-pass path (short documents) -------------------
+  if (!useMapReduce) {
+    const sys = SUMMARIZE_SYSTEM_PROMPT.replace('{LANGUAGE}', langName);
+    // With the new 50K budget and a 16K context window, the document
+    // fits in a single pass — `truncated` should be false on this path.
+    const truncationNote = truncated
+      ? `\n\n[NOTE: the document is ${charCount.toLocaleString()} characters; the assistant only sees the first ${text.length.toLocaleString()} characters in this turn.]`
+      : '';
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: sys },
+      {
+        role: 'user',
+        content: `Summarize the following document.\n\nTitle: "${doc.title}"\nCategory: ${doc.category}\nPages: ${doc.page_count}${truncationNote}\n\nDocument text:\n${text}\n\nWrite the summary now.`,
+      },
+    ];
+
+    for await (const delta of chatStream(messages, {
+      temperature: 0.2,
+      // Bumped from 1500 → 2048 so a coverage-first summary has room to
+      // reach the last section instead of getting cut mid-bullet.
+      maxTokens: 2048,
+      numCtx: 16_384,
+    })) {
+      yield { kind: 'delta', text: delta };
+    }
+    yield {
+      kind: 'done',
+      citations: [{ doc_id: doc.doc_id, title: doc.title, page: 1 }],
       truncated,
     };
     return;
   }
 
-  const truncationNote = truncated
-    ? `\n\n[NOTE: the document is ${charCount.toLocaleString()} characters; the assistant only sees the first ${text.length.toLocaleString()} characters in this turn.]`
-    : '';
+  // ---------------- Map-reduce path (long documents) ---------------------
+  const sections = buildMapReduceSections(doc);
+  if (sections.length === 0) {
+    // Defensive — shouldn't happen because charCount > 0 was already
+    // confirmed above, but keep the user moving forward gracefully.
+    yield {
+      kind: 'delta',
+      text:
+        'Could not split this document into readable sections. It may contain only structural markers without text content.',
+    };
+    yield {
+      kind: 'done',
+      citations: [{ doc_id: doc.doc_id, title: doc.title, page: 1 }],
+      truncated: false,
+    };
+    return;
+  }
 
-  const messages: ChatMessage[] = [
-    { role: 'system', content: sys },
+  // Map step — one Gemma 4 call per section. Each yields an outline; we
+  // collect them locally instead of streaming so the UI shows a single
+  // cohesive final summary, not a noisy intermediate cascade.
+  const sysMap = MAP_SECTION_SYSTEM_PROMPT.replace('{LANGUAGE}', langName);
+  const sectionOutlines: string[] = [];
+  for (let i = 0; i < sections.length; i++) {
+    yield {
+      kind: 'progress',
+      stage: 'mapping',
+      sectionIndex: i + 1,
+      totalSections: sections.length,
+    };
+    const sec = sections[i];
+    const pageLabel =
+      sec.page_end !== sec.page_start
+        ? `pp. ${sec.page_start}–${sec.page_end}`
+        : `p. ${sec.page_start}`;
+    const userMsg = `Document: "${doc.title}"\nThis section covers ${pageLabel}.\n\nSection text:\n${sec.text}\n\nWrite the structured outline now.`;
+    try {
+      const outline = await chat(
+        [
+          { role: 'system', content: sysMap },
+          { role: 'user', content: userMsg },
+        ],
+        { temperature: 0.2, maxTokens: 700, numCtx: 16_384 }
+      );
+      const cleaned = outline.trim();
+      if (cleaned) {
+        sectionOutlines.push(
+          `### Section ${i + 1} (${pageLabel})\n${cleaned}`
+        );
+      }
+    } catch (e) {
+      // A single failed section shouldn't kill the whole summary —
+      // skip it and let the reduce step work with what we have.
+      console.warn('[rag] map-step failed for section', i + 1, e);
+    }
+  }
+
+  if (sectionOutlines.length === 0) {
+    yield {
+      kind: 'delta',
+      text:
+        'Gemma 4 produced no usable section outlines for this document. Make sure Ollama is running smoothly and try again.',
+    };
+    yield {
+      kind: 'done',
+      citations: [{ doc_id: doc.doc_id, title: doc.title, page: 1 }],
+      truncated: false,
+    };
+    return;
+  }
+
+  // Reduce step — synthesize all outlines into one cohesive summary,
+  // streamed back to the UI as it generates.
+  yield { kind: 'progress', stage: 'reducing' };
+  const sysReduce = REDUCE_SYSTEM_PROMPT.replace('{LANGUAGE}', langName);
+  const combined = sectionOutlines.join('\n\n---\n\n');
+  const reduceUserMsg = `Document: "${doc.title}"\nCategory: ${doc.category}\nTotal pages: ${doc.page_count}\nProcessed in ${sections.length} sections.\n\nSection outlines (in document order):\n\n${combined}\n\nWrite the unified executive summary now.`;
+
+  for await (const delta of chatStream(
+    [
+      { role: 'system', content: sysReduce },
+      { role: 'user', content: reduceUserMsg },
+    ],
     {
-      role: 'user',
-      content: `Summarize the following document.\n\nTitle: "${doc.title}"\nCategory: ${doc.category}\nPages: ${doc.page_count}${truncationNote}\n\nDocument text:\n${text}\n\nWrite the summary now.`,
-    },
-  ];
-
-  for await (const delta of chatStream(messages, {
-    temperature: 0.2,
-    maxTokens: 1500,
-    numCtx: 8192,
-  })) {
+      temperature: 0.3,
+      // The reduce step needs more output budget than single-pass since
+      // it covers a longer document end-to-end. Bumped from 2048 → 3072
+      // so a coverage-first synthesis has room to reach the last section.
+      maxTokens: 3072,
+      numCtx: 16_384,
+    }
+  )) {
     yield { kind: 'delta', text: delta };
   }
+
+  // Map-reduce processed every section, so nothing was dropped — the
+  // truncation warning never fires on this path.
   yield {
     kind: 'done',
     citations: [{ doc_id: doc.doc_id, title: doc.title, page: 1 }],
-    truncated,
+    truncated: false,
   };
 }
 

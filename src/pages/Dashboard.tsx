@@ -51,6 +51,193 @@ const PRIORITY_COLORS = {
   NORMAL: '#22c55e',
 };
 
+// =========================================================================
+// PDF export helpers — used by the "Export PDF" button on the AI Executive
+// Summary card. We render a small standalone HTML document and let the
+// browser's native print-to-PDF do the rest. No new dependency, no bundle
+// bloat, full RTL support, real selectable text in the resulting file.
+// =========================================================================
+
+const escapeHtml = (s: string): string =>
+  s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+// Apply inline emphasis AFTER HTML escaping so the asterisks survive the
+// escape but our markers still match.
+const formatInline = (s: string): string => {
+  let html = escapeHtml(s);
+  html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
+  // simple `code` spans
+  html = html.replace(/`([^`]+?)`/g, '<code>$1</code>');
+  return html;
+};
+
+// Minimal markdown-to-HTML converter — tuned to the four shapes the AI
+// summary actually uses: ## / ### headers, "- " or "* " bullets, blank
+// lines as paragraph separators, and inline **bold** / *italic* / `code`.
+const summaryMarkdownToHtml = (md: string): string => {
+  const lines = md.split('\n');
+  const out: string[] = [];
+  let inList = false;
+  const closeList = () => {
+    if (inList) {
+      out.push('</ul>');
+      inList = false;
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) {
+      closeList();
+      continue;
+    }
+    if (line.startsWith('## ')) {
+      closeList();
+      out.push(`<h2>${formatInline(line.slice(3))}</h2>`);
+    } else if (line.startsWith('### ')) {
+      closeList();
+      out.push(`<h3>${formatInline(line.slice(4))}</h3>`);
+    } else if (line.startsWith('# ')) {
+      closeList();
+      out.push(`<h1>${formatInline(line.slice(2))}</h1>`);
+    } else if (line.startsWith('- ') || line.startsWith('* ')) {
+      if (!inList) {
+        out.push('<ul>');
+        inList = true;
+      }
+      out.push(`<li>${formatInline(line.slice(2))}</li>`);
+    } else {
+      closeList();
+      out.push(`<p>${formatInline(line)}</p>`);
+    }
+  }
+  closeList();
+  return out.join('\n');
+};
+
+const buildSummaryPrintDoc = (
+  body: string,
+  source: 'ai' | 'rules' | null,
+  lang: 'en' | 'ar' | 'fr' | 'es'
+): string => {
+  const dir = lang === 'ar' ? 'rtl' : 'ltr';
+  const generatedLabels: Record<string, string> = {
+    en: 'Generated',
+    ar: 'تم الإنشاء',
+    fr: 'Généré le',
+    es: 'Generado',
+  };
+  const titleLabels: Record<string, string> = {
+    en: 'AidFlow Pro — Operations brief',
+    ar: 'AidFlow Pro — تقرير العمليات',
+    fr: 'AidFlow Pro — Note d’opérations',
+    es: 'AidFlow Pro — Resumen de operaciones',
+  };
+  const sourceLabel =
+    source === 'ai'
+      ? 'AI brief (Gemma 4 E4B via Ollama)'
+      : source === 'rules'
+      ? 'Rule-based fallback (Ollama unreachable)'
+      : '';
+
+  const title = titleLabels[lang] ?? titleLabels.en;
+  const generatedAt = new Date();
+  const generatedHuman = generatedAt.toLocaleString();
+  const isoStamp = generatedAt.toISOString().slice(0, 19).replace('T', ' ');
+
+  const fontStack =
+    lang === 'ar'
+      ? `"Tahoma", "Arial", "Segoe UI", sans-serif`
+      : `-apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif`;
+  const listSidePadding = lang === 'ar' ? 'padding-right: 22px; padding-left: 0' : 'padding-left: 22px; padding-right: 0';
+
+  return `<!DOCTYPE html>
+<html lang="${lang}" dir="${dir}">
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(title)} — ${escapeHtml(generatedAt.toLocaleDateString())}</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  html, body { background: #fff; }
+  body {
+    font-family: ${fontStack};
+    color: #222831;
+    line-height: 1.55;
+    max-width: 720px;
+    margin: 24px auto;
+    padding: 0 24px;
+    font-size: 12.5pt;
+  }
+  header {
+    border-bottom: 2px solid #00ADB5;
+    padding-bottom: 12px;
+    margin-bottom: 18px;
+  }
+  header h1 {
+    font-size: 22px;
+    margin: 0 0 4px;
+    color: #222831;
+  }
+  header .meta { font-size: 11px; color: #666; }
+  h2 {
+    font-size: 16px;
+    color: #00ADB5;
+    margin: 18px 0 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #eee;
+  }
+  h3 { font-size: 14px; margin: 14px 0 6px; }
+  ul { ${listSidePadding}; margin: 6px 0; }
+  li { margin: 4px 0; }
+  p { margin: 6px 0; }
+  strong { color: #222831; }
+  em { color: #393E46; }
+  code {
+    background: #f3f4f6;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-family: "Menlo", "Consolas", monospace;
+    font-size: 0.9em;
+  }
+  footer {
+    margin-top: 24px;
+    padding-top: 12px;
+    border-top: 1px solid #eee;
+    font-size: 10px;
+    color: #888;
+  }
+  @media print {
+    body { margin: 0; max-width: none; padding: 0; }
+    header { break-after: avoid; page-break-after: avoid; }
+    h2, h3 { break-after: avoid; page-break-after: avoid; }
+    li { break-inside: avoid; page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body dir="${dir}">
+  <header>
+    <h1>${escapeHtml(title)}</h1>
+    <div class="meta">
+      ${escapeHtml(generatedLabels[lang] ?? generatedLabels.en)} ${escapeHtml(generatedHuman)}${
+    sourceLabel ? ` · ${escapeHtml(sourceLabel)}` : ''
+  }
+    </div>
+  </header>
+  <main>
+${summaryMarkdownToHtml(body)}
+  </main>
+  <footer>
+    AidFlow Pro · Gemma 4 Good Hackathon · ${escapeHtml(isoStamp)}
+  </footer>
+</body>
+</html>`;
+};
+
 export default function Dashboard() {
   const { t } = useTranslation();
   const conn = useConnectivityStore();
@@ -144,37 +331,41 @@ export default function Dashboard() {
 
   // ---- Actions ------------------------------------------------------------
 
-  const exportCSV = () => {
-    const headers = [
-      'distribution_id', 'family_id', 'family_name', 'sector', 'status',
-      'created_at', 'delivered_at', 'delivered_by',
-      'items', 'priority_score', 'flag', 'failure_reason',
-    ];
-    const rows = distributions.map((d) => {
-      const f = families.find((x) => x.family_id === d.family_id);
-      return [
-        d.distribution_id,
-        d.family_id,
-        f?.head_name ?? '',
-        f?.location_sector ?? '',
-        d.status,
-        d.created_at,
-        d.delivered_at ?? '',
-        d.delivered_by ?? d.distributed_by ?? '',
-        d.items_distributed.map((i) => `${i.item_name} x${i.quantity}`).join('; '),
-        d.ai_priority_score,
-        d.new_needs_flagged ? 'yes' : '',
-        d.failure_reason ?? '',
-      ].map((v) => `"${String(v).replaceAll('"', '""')}"`);
-    });
-    const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `aidflow-export-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  // ---- PDF export of the AI executive summary ----------------------------
+  //
+  // Strategy: we use the browser's native print-to-PDF rather than bundling
+  // jsPDF or pdfmake — it costs zero bytes in the bundle, works fully
+  // offline, produces a real PDF with selectable text, and handles RTL
+  // Arabic perfectly. The button opens a small new window with the summary
+  // already styled for print and auto-triggers the OS print dialog where
+  // "Save as PDF" is the default destination on every modern OS.
+
+  const exportSummaryAsPdf = () => {
+    if (!summary || generating) return;
+    const html = buildSummaryPrintDoc(summary, summarySource, language);
+    const win = window.open('', '_blank', 'width=820,height=900');
+    if (!win) {
+      setSummaryError(
+        'Pop-up blocked. Please allow pop-ups for this site so the PDF export window can open.'
+      );
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    const trigger = () => {
+      try {
+        win.focus();
+        win.print();
+      } catch {
+        // some browsers throw if the window was closed before print fires
+      }
+    };
+    if (win.document.readyState === 'complete') {
+      setTimeout(trigger, 80);
+    } else {
+      win.addEventListener('load', () => setTimeout(trigger, 80));
+    }
   };
 
   // ---- AI executive summary ----------------------------------------------
@@ -265,6 +456,93 @@ export default function Dashboard() {
       })
       .sort((a, b) => b.active - a.active);
 
+    // ---- AI-augmented signals (added for richer briefings) ----------------
+    //
+    // These three blocks turn the AI summary from a pure status report into
+    // something that can also surface (a) supply-pacing intelligence and
+    // (b) anomalies worth investigating — without inventing data the system
+    // doesn't have. All numbers are derived from the same Dexie tables the
+    // dashboard already shows; the AI just gets to reason over them.
+
+    const sevenDaysAgo = Date.now() - 7 * 86_400_000;
+
+    // Items velocity — top 5 items by quantity distributed in the last 7 days.
+    // Lets the AI say "hygiene kits going out at ~12/day" so procurement can
+    // anticipate without us shipping a full stock register.
+    const itemCounts = new Map<string, number>();
+    for (const d of distributions) {
+      if (d.status !== 'delivered') continue;
+      const ts = new Date(d.delivered_at ?? d.created_at ?? '').getTime();
+      if (Number.isNaN(ts) || ts < sevenDaysAgo) continue;
+      for (const it of d.items_distributed) {
+        const key = (it.item_name ?? '').trim().toLowerCase();
+        if (!key) continue;
+        itemCounts.set(key, (itemCounts.get(key) ?? 0) + (Number(it.quantity) || 0));
+      }
+    }
+    const itemsVelocity = Array.from(itemCounts.entries())
+      .map(([item, qty_7d]) => ({
+        item,
+        qty_7d,
+        qty_per_day: Math.round((qty_7d / 7) * 10) / 10,
+      }))
+      .sort((a, b) => b.qty_7d - a.qty_7d)
+      .slice(0, 5);
+
+    // Repeat-delivery anomalies — same family received the same item type
+    // 3+ times in the last 7 days. Often legitimate (recurring need), but
+    // worth a glance to rule out duplicate orders or fraud.
+    const repeatMap = new Map<
+      string,
+      { family_id: string; family: string; item: string; count: number }
+    >();
+    for (const d of distributions) {
+      if (d.status !== 'delivered') continue;
+      const ts = new Date(d.delivered_at ?? d.created_at ?? '').getTime();
+      if (Number.isNaN(ts) || ts < sevenDaysAgo) continue;
+      const fam = familyMap.get(d.family_id);
+      if (!fam) continue;
+      for (const it of d.items_distributed) {
+        const itemName = (it.item_name ?? '').trim();
+        if (!itemName) continue;
+        const key = `${d.family_id}|${itemName.toLowerCase()}`;
+        const cur = repeatMap.get(key) ?? {
+          family_id: d.family_id,
+          family: fam.head_name,
+          item: itemName,
+          count: 0,
+        };
+        cur.count += 1;
+        repeatMap.set(key, cur);
+      }
+    }
+    const repeatDeliveryAlerts = Array.from(repeatMap.values())
+      .filter((r) => r.count >= 3)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    // Unserved-too-long — critical-priority families with no recorded aid
+    // in 14+ days (or never). The dashboard already shows critical count,
+    // but this is the *high-priority + neglected* intersection that
+    // genuinely needs the admin's attention first thing in the morning.
+    const unservedTooLong = scored
+      .filter((f) => f.score >= 80)
+      .map((f) => {
+        const days = f.last_aid_at
+          ? Math.floor((Date.now() - new Date(f.last_aid_at).getTime()) / 86_400_000)
+          : null;
+        return {
+          family_id: f.family_id,
+          head_name: f.head_name,
+          sector: f.location_sector,
+          score: f.score,
+          days_since_last_aid: days,
+        };
+      })
+      .filter((f) => f.days_since_last_aid === null || f.days_since_last_aid >= 14)
+      .sort((a, b) => (b.days_since_last_aid ?? 9999) - (a.days_since_last_aid ?? 9999))
+      .slice(0, 5);
+
     return {
       generated_at: new Date().toISOString(),
       totals: {
@@ -289,6 +567,10 @@ export default function Dashboard() {
       stuck_orders: stuckOrders,
       recent_failures_or_cancellations: recentIssues,
       worker_workload: workerLoad,
+      // AI-augmented signals
+      items_velocity_7d: itemsVelocity,
+      repeat_delivery_alerts_7d: repeatDeliveryAlerts,
+      unserved_too_long_critical: unservedTooLong,
     };
   };
 
@@ -317,6 +599,27 @@ export default function Dashboard() {
       lines.push(`- ${plural(t.new_needs_flagged, 'family', 'families')} flagged with a new urgent need on the last visit.`);
     if (t.stuck_24h > 0)
       lines.push(`- ${plural(t.stuck_24h, 'order', 'orders')} stuck in out-for-delivery for over 24h — investigate or reassign.`);
+    if (payload.unserved_too_long_critical.length > 0) {
+      lines.push(
+        `- ${plural(payload.unserved_too_long_critical.length, 'critical family', 'critical families')} unserved 14+ days: ` +
+          payload.unserved_too_long_critical
+            .map(
+              (f) =>
+                `**${f.head_name}** (${f.sector}, ${f.days_since_last_aid === null ? 'never' : `${f.days_since_last_aid}d`})`
+            )
+            .join('; ') +
+          '.'
+      );
+    }
+    if (payload.repeat_delivery_alerts_7d.length > 0) {
+      lines.push(
+        `- Repeat-delivery to verify: ` +
+          payload.repeat_delivery_alerts_7d
+            .map((r) => `**${r.family}** received "${r.item}" ×${r.count} in 7d`)
+            .join('; ') +
+          '.'
+      );
+    }
     if (payload.recent_failures_or_cancellations.length > 0) {
       lines.push(
         `- Recent failures/cancellations: ${payload.recent_failures_or_cancellations
@@ -340,6 +643,12 @@ export default function Dashboard() {
       lines.push(`- Prioritise the ${plural(t.critical_priority, 'CRITICAL family', 'CRITICAL families')} listed above for the next distribution session.`);
     if (payload.worker_workload[0]?.active >= 2)
       lines.push(`- Workload is concentrated on ${payload.worker_workload[0].name} (${payload.worker_workload[0].active} active) — consider rebalancing.`);
+    if (payload.items_velocity_7d.length > 0) {
+      const top = payload.items_velocity_7d[0];
+      lines.push(
+        `- Supply pacing (last 7d): top item is **${top.item}** at ${top.qty_per_day}/day (${top.qty_7d} this week) — review stock and reorder lead time.`
+      );
+    }
     if (lines.length === recBefore) lines.push('- Operations are steady; continue current cadence.');
     return lines.join('\n');
   };
@@ -389,8 +698,13 @@ export default function Dashboard() {
       `You are AidFlow Pro's reporting AI. Respond in ${langName}. ` +
       `Write a director-style executive brief in markdown with EXACTLY these four sections, in this order: ` +
       `## Impact, ## Gaps & risks, ## Top critical cases, ## Recommended actions. ` +
-      `Use 2-5 bullet points per section. Cite real family names, family_ids, sectors, and order numbers from the JSON below. ` +
-      `Never invent data. Keep total length under ~280 words. Plain markdown only — no tables, no code fences, no preamble. ` +
+      `Each section MUST be filled out — never leave a section empty or with a single bullet. Aim for 4-6 substantive bullet points per section. ` +
+      `Cite real family names, family_ids, sectors, order numbers, worker names, and item names from the JSON below. ` +
+      `## Impact — cover deliveries today, items distributed, lifetime delivered count, sectors active, and any new-needs flags. ` +
+      `## Gaps & risks — cover stuck_orders >24h, repeat_delivery_alerts_7d (same family + same item 3+ times in a week — flag for review), unserved_too_long_critical (critical families with no aid in 14+ days), recent failed/cancelled orders, and worker-load imbalance. ` +
+      `## Top critical cases — list the top 3-5 critical families with name, family_id, sector, score, and last-aid recency, plus their reason. ` +
+      `## Recommended actions — give 4-6 concrete next steps. Name the highest-paced item from items_velocity_7d with its qty/day so procurement can react. Reference specific stuck orders or unserved families by id when proposing follow-up. ` +
+      `Never invent data; if a signal is genuinely empty, briefly note "none" rather than skipping the section. Aim for 400-600 words total. Plain markdown only — no tables, no code fences, no preamble. ` +
       `Start your response directly with "## Impact".`;
 
     const userPrompt =
@@ -405,7 +719,7 @@ export default function Dashboard() {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        { temperature: 0.4, maxTokens: 1024 }
+        { temperature: 0.4, maxTokens: 2048 }
       )) {
         acc += delta;
         setSummary(acc);
@@ -434,21 +748,82 @@ export default function Dashboard() {
   // ---- Render -------------------------------------------------------------
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <BarChart3 size={22} />
-            {t('nav.dashboard')}
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">{new Date().toLocaleDateString()}</p>
-        </div>
-        <button
-          onClick={exportCSV}
-          className="touch-target px-3 py-2 bg-brand hover:bg-brand-dark rounded-lg text-sm flex items-center gap-2 font-semibold"
-        >
-          <Download size={14} /> {t('reports.export_csv')}
-        </button>
+      <header>
+        <h1 className="text-2xl font-bold flex items-center gap-2">
+          <BarChart3 size={22} />
+          {t('nav.dashboard')}
+        </h1>
+        <p className="text-sm text-slate-400 mt-1">{new Date().toLocaleDateString()}</p>
       </header>
+
+      {/* AI Executive Summary — placed at the top so it's the first thing
+          the admin sees on landing. Export PDF lives here too, right next to
+          Regenerate, and only appears once a summary has actually been
+          generated. */}
+      <Card
+        title={
+          <div className="flex items-center gap-2">
+            <Sparkles size={14} className="text-ai" /> AI Executive Summary
+            {summarySource === 'ai' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-ai/15 text-ai font-semibold">
+                Gemma 4
+              </span>
+            )}
+            {summarySource === 'rules' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-priority-medium/15 text-priority-medium font-semibold flex items-center gap-1">
+                <WifiOff size={10} /> Rule-based fallback
+              </span>
+            )}
+          </div>
+        }
+        action={
+          <div className="flex items-center gap-2">
+            {summary && !generating && (
+              <button
+                onClick={exportSummaryAsPdf}
+                title={t('reports.export_pdf', 'Export PDF')}
+                className="touch-target px-3 py-1.5 bg-brand hover:bg-brand-dark rounded-lg text-xs flex items-center gap-1 font-semibold"
+              >
+                <Download size={12} /> {t('reports.export_pdf', 'Export PDF')}
+              </button>
+            )}
+            <button
+              onClick={() => void generateSummary()}
+              disabled={generating}
+              className="touch-target px-3 py-1.5 bg-ai hover:bg-violet-600 disabled:opacity-50 rounded-lg text-xs flex items-center gap-1 font-semibold"
+            >
+              {generating ? (
+                <Loading />
+              ) : summary ? (
+                <RefreshCw size={12} />
+              ) : (
+                <Sparkles size={12} />
+              )}
+              {generating
+                ? 'Generating…'
+                : summary
+                ? 'Regenerate'
+                : t('reports.summary')}
+            </button>
+          </div>
+        }
+      >
+        {summaryError && (
+          <div className="mb-3 text-xs px-3 py-2 rounded-lg bg-priority-medium/10 border border-priority-medium/30 text-priority-medium flex items-start gap-2">
+            <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+            <span>{summaryError}</span>
+          </div>
+        )}
+        {summary ? (
+          <div className="prose-ai text-sm text-slate-200 leading-relaxed break-words">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary}</ReactMarkdown>
+          </div>
+        ) : generating ? (
+          <p className="text-sm text-slate-500 italic">Asking Gemma 4 to draft the executive brief…</p>
+        ) : (
+          <p className="text-sm text-slate-500">{t('reports.summary_placeholder')}</p>
+        )}
+      </Card>
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
@@ -628,60 +1003,6 @@ export default function Dashboard() {
         )}
       </Card>
 
-      {/* AI Executive Summary (from /reports) */}
-      <Card
-        title={
-          <div className="flex items-center gap-2">
-            <Sparkles size={14} className="text-ai" /> AI Executive Summary
-            {summarySource === 'ai' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-ai/15 text-ai font-semibold">
-                Gemma 4
-              </span>
-            )}
-            {summarySource === 'rules' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-priority-medium/15 text-priority-medium font-semibold flex items-center gap-1">
-                <WifiOff size={10} /> Rule-based fallback
-              </span>
-            )}
-          </div>
-        }
-        action={
-          <button
-            onClick={() => void generateSummary()}
-            disabled={generating}
-            className="touch-target px-3 py-1.5 bg-ai hover:bg-violet-600 disabled:opacity-50 rounded-lg text-xs flex items-center gap-1 font-semibold"
-          >
-            {generating ? (
-              <Loading />
-            ) : summary ? (
-              <RefreshCw size={12} />
-            ) : (
-              <Sparkles size={12} />
-            )}
-            {generating
-              ? 'Generating…'
-              : summary
-              ? 'Regenerate'
-              : t('reports.summary')}
-          </button>
-        }
-      >
-        {summaryError && (
-          <div className="mb-3 text-xs px-3 py-2 rounded-lg bg-priority-medium/10 border border-priority-medium/30 text-priority-medium flex items-start gap-2">
-            <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
-            <span>{summaryError}</span>
-          </div>
-        )}
-        {summary ? (
-          <div className="prose-ai text-sm text-slate-200 leading-relaxed break-words">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary}</ReactMarkdown>
-          </div>
-        ) : generating ? (
-          <p className="text-sm text-slate-500 italic">Asking Gemma 4 to draft the executive brief…</p>
-        ) : (
-          <p className="text-sm text-slate-500">{t('reports.summary_placeholder')}</p>
-        )}
-      </Card>
     </div>
   );
 }

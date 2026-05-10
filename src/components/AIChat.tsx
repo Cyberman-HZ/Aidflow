@@ -1,5 +1,6 @@
 // Reusable Gemma 4 chat panel.
-// Used by /assistant, /family/:id ("ask about this family"), and /guides.
+// Used by /assistant, /family/:id ("ask about this family"), and /docs
+// (Knowledge Base RAG chat).
 
 import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -202,6 +203,15 @@ interface AIChatProps {
    * from Dexie at send time so a delivery that just landed is reflected.
    */
   history?: AidDistribution[];
+  /**
+   * Click-to-run prompt chips shown above the empty state. Each entry has
+   * a `label` (rendered on the chip and shown as the user bubble when
+   * clicked) and a `reply` markdown string (rendered as the assistant's
+   * answer WITHOUT calling Gemma 4). This gives us deterministic, instant
+   * answers for capability-discovery questions — works offline, never
+   * drifts, never hallucinates.
+   */
+  suggestedPrompts?: ReadonlyArray<{ label: string; reply: string }>;
 }
 
 export default function AIChat({
@@ -215,6 +225,7 @@ export default function AIChat({
   flex = true,
   family,
   history,
+  suggestedPrompts,
 }: AIChatProps) {
   const { t } = useTranslation();
   const language = useSettingsStore((s) => s.language);
@@ -497,6 +508,20 @@ export default function AIChat({
     }
   };
 
+  // Click handler for suggested-prompt chips. Appends the user bubble + a
+  // deterministic assistant reply directly — no Gemma 4 call, no streaming.
+  // Used for capability-discovery questions where a hard-coded answer is
+  // more reliable than asking the model.
+  const runSuggestedPrompt = (p: { label: string; reply: string }) => {
+    if (thinking) return;
+    const now = new Date().toISOString();
+    setMessages((m) => [
+      ...m,
+      { role: 'user', content: p.label, timestamp: now },
+      { role: 'assistant', content: p.reply, timestamp: now },
+    ]);
+  };
+
   return (
     <div
       className={`bg-surface rounded-xl border border-slate-700 ${
@@ -513,6 +538,19 @@ export default function AIChat({
           <div className="text-slate-500 text-sm text-center py-8">
             <Sparkles className="mx-auto mb-2 text-ai" size={24} />
             <p>{t('assistant.system_note')}</p>
+            {suggestedPrompts && suggestedPrompts.length > 0 && (
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                {suggestedPrompts.map((p, i) => (
+                  <button
+                    key={i}
+                    onClick={() => runSuggestedPrompt(p)}
+                    className="touch-target px-3 py-1.5 rounded-full text-xs bg-ai/10 hover:bg-ai/20 text-ai border border-ai/30 font-medium transition-colors"
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {messages.map((m, i) => (

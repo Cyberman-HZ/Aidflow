@@ -11,7 +11,6 @@ import {
   Smile,
   Globe,
   Store,
-  MessageSquare,
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import AIChat from '@/components/AIChat';
@@ -20,6 +19,74 @@ import { db } from '@/db/database';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { buildSystemPrompt } from '@/services/aiContext';
 import { COUNTRIES as STARLINK_COUNTRIES } from '@/services/starlinkCountries';
+
+// Capability self-description shown when the admin clicks the
+// "Ask me what I can do?" suggested prompt in the chat. Hand-authored
+// (instead of generated) so it stays accurate, instant, and offline-safe.
+const ASSISTANT_CAPABILITIES_REPLY = `Here's what I can help you with — all answered offline using **Gemma 4** running locally on this machine.
+
+## Coordinator decision support
+- **Morning briefing** — summarize yesterday vs today, surface what needs attention before noon.
+- **Demand pacing** — name the highest-velocity items so procurement can react before stock runs out.
+- **Anomaly review** — flag stuck orders, repeat deliveries to the same family, possible duplicate registrations, worker-load imbalance.
+
+## Family registry & priorities
+- Ranked priority list with explanations for each score.
+- Look up any family by name or family ID; show composition, medical flags, displacement, current needs (with quantities).
+- Distribution history: "When did the Hassan family last receive food?", "What was given on the last visit?" — answers grounded in the actual ledger.
+- Propose record edits (sector, displacement, current needs) that you Apply or Discard before any write.
+
+## Distribution ledger
+- Look up any order by \`ORD-NNNN\` or distribution ID.
+- Status of pending / out-for-delivery / delivered / failed / cancelled orders.
+- Per-worker active workload right now.
+- Today's deliveries broken down by sector, by worker, or by item.
+
+## Workers
+- Roster lookup (first / last name, position, email, address).
+- Who's busy out for delivery, who's available to take a new order.
+
+## Knowledge Base (uploaded PDFs)
+- Retrieval-augmented answers with **source citations** — e.g. *"What's the oral rehydration ratio for a 2-year-old?"*
+- Per-document summaries on demand (use the **Summarize** button on each PDF).
+- Cross-document synthesis across your whole library at once.
+
+## Starlink reference
+- Country availability (live / coming soon / waitlist / unavailable).
+- Authorized resellers grouped by continent and country.
+
+## Languages
+- I respond in **English, Arabic (RTL), French, or Spanish** depending on your UI setting.
+
+To get started, click any prompt on the right or just type a question.`;
+
+// "Try asking" sidebar — three categories the admin should reach for first,
+// two prompts each. Click a prompt to copy it to the clipboard, then paste
+// it into the chat input. Kept at file scope so the array isn't rebuilt on
+// every render.
+const PROMPT_GROUPS: ReadonlyArray<{ label: string; prompts: readonly string[] }> = [
+  {
+    label: 'Morning briefing',
+    prompts: [
+      'Give me a 4-sentence briefing on yesterday vs today.',
+      "List critical-priority families that haven't received aid in 14+ days.",
+    ],
+  },
+  {
+    label: 'Demand pacing',
+    prompts: [
+      "What's our highest-velocity item this week, and at what daily rate?",
+      'If our pace holds, what should procurement reorder first?',
+    ],
+  },
+  {
+    label: 'Anomaly review',
+    prompts: [
+      'Any families that received the same item 3+ times in the last 7 days?',
+      'Are there orders stuck out for delivery for more than 24 hours?',
+    ],
+  },
+];
 
 export default function Assistant() {
   const { t } = useTranslation();
@@ -34,15 +101,14 @@ export default function Assistant() {
   const guides = useLiveQuery(() => db.guides.toArray()) ?? [];
   const kids = useLiveQuery(() => db.kids.toArray()) ?? [];
   const resellers = useLiveQuery(() => db.resellers.toArray()) ?? [];
-  const messages = useLiveQuery(() => db.messages.toArray()) ?? [];
 
   const systemPrompt = useMemo(
     () =>
       buildSystemPrompt(
-        { families, distributions, workers, documents, guides, kids, resellers, messages },
+        { families, distributions, workers, documents, guides, kids, resellers },
         { language }
       ),
-    [families, distributions, workers, documents, guides, kids, resellers, messages, language]
+    [families, distributions, workers, documents, guides, kids, resellers, language]
   );
 
   const dataChips: { icon: React.ReactNode; label: string; count: number }[] = [
@@ -54,7 +120,6 @@ export default function Assistant() {
     { icon: <Smile size={11} />, label: 'kids', count: kids.length },
     { icon: <Globe size={11} />, label: 'Starlink countries', count: STARLINK_COUNTRIES.length },
     { icon: <Store size={11} />, label: 'Starlink retailers', count: resellers.length },
-    { icon: <MessageSquare size={11} />, label: 'messages', count: messages.length },
   ];
 
   return (
@@ -84,35 +149,37 @@ export default function Assistant() {
           systemPrompt={systemPrompt}
           enableRag
           placeholder={t('assistant.placeholder')}
+          suggestedPrompts={[
+            {
+              label: 'Ask me what I can do?',
+              reply: ASSISTANT_CAPABILITIES_REPLY,
+            },
+          ]}
         />
 
-        <aside className="hidden lg:block space-y-4">
-          <Card title={t('assistant.examples.title')}>
-            <ul className="text-sm space-y-2">
-              {(['q1', 'q2', 'q3'] as const).map((k) => (
-                <li
-                  key={k}
-                  className="bg-surface-light p-3 rounded-lg text-slate-300 hover:text-white cursor-pointer"
-                  onClick={() => navigator.clipboard.writeText(t(`assistant.examples.${k}`))}
-                  title="Click to copy"
-                >
-                  {t(`assistant.examples.${k}`)}
-                </li>
-              ))}
-            </ul>
-          </Card>
+        <aside className="hidden lg:block">
           <Card title="Try asking">
-            <ul className="text-xs text-slate-300 space-y-1.5 list-disc list-inside">
-              <li>Show me everything about ORD-001.</li>
-              <li>Which active orders are unassigned right now?</li>
-              <li>Who is the busiest field worker this week?</li>
-              <li>List all critical-priority families with pregnant members.</li>
-              <li>Is Starlink available in Yemen?</li>
-              <li>Which retailers sell Starlink in Kenya?</li>
-              <li>What's in our aid guide for water purification tablets?</li>
-              <li>Summarize today's distributions by sector.</li>
-              <li>Show me the latest Bitchat messages on #medical-team.</li>
-            </ul>
+            <div className="space-y-4">
+              {PROMPT_GROUPS.map((group) => (
+                <div key={group.label}>
+                  <div className="text-[10px] uppercase tracking-wider text-ai font-semibold mb-1.5">
+                    {group.label}
+                  </div>
+                  <ul className="space-y-1.5">
+                    {group.prompts.map((p) => (
+                      <li
+                        key={p}
+                        className="bg-surface-light p-2 rounded-md text-xs text-slate-300 hover:text-white cursor-pointer leading-snug"
+                        onClick={() => navigator.clipboard.writeText(p)}
+                        title="Click to copy"
+                      >
+                        {p}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
           </Card>
         </aside>
       </div>

@@ -18,6 +18,8 @@ import {
   X as XIcon,
   ScrollText,
   AlertTriangle,
+  Download,
+  ChevronDown,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -30,6 +32,182 @@ import { Card } from '@/components/Card';
 import EmptyState from '@/components/EmptyState';
 import AIChat from '@/components/AIChat';
 import type { KnowledgeDocument } from '@/types';
+
+// =========================================================================
+// Translation helpers (file scope so they're not recreated each render).
+// =========================================================================
+
+type TargetLang = 'en' | 'ar' | 'fr' | 'es';
+const TARGET_LANGS: ReadonlyArray<{ code: TargetLang; label: string; native: string }> = [
+  { code: 'en', label: 'English', native: 'English' },
+  { code: 'ar', label: 'Arabic', native: 'العربية' },
+  { code: 'fr', label: 'French', native: 'Français' },
+  { code: 'es', label: 'Spanish', native: 'Español' },
+];
+
+function langName(code: TargetLang): string {
+  return TARGET_LANGS.find((l) => l.code === code)?.label ?? code;
+}
+
+const escapeHtml = (s: string): string =>
+  s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const formatInline = (s: string): string => {
+  let html = escapeHtml(s);
+  html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
+  html = html.replace(/`([^`]+?)`/g, '<code>$1</code>');
+  return html;
+};
+
+// Minimal markdown→HTML converter — same approach used for the Dashboard
+// AI summary export. The summary prompt instructs Gemma 4 to use short
+// bold headings + bullets, so this small subset covers every shape we
+// expect.
+const summaryMdToHtml = (md: string): string => {
+  const lines = md.split('\n');
+  const out: string[] = [];
+  let inList = false;
+  const closeList = () => {
+    if (inList) {
+      out.push('</ul>');
+      inList = false;
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) {
+      closeList();
+      continue;
+    }
+    if (line.startsWith('## ')) {
+      closeList();
+      out.push(`<h2>${formatInline(line.slice(3))}</h2>`);
+    } else if (line.startsWith('### ')) {
+      closeList();
+      out.push(`<h3>${formatInline(line.slice(4))}</h3>`);
+    } else if (line.startsWith('# ')) {
+      closeList();
+      out.push(`<h1>${formatInline(line.slice(2))}</h1>`);
+    } else if (line.startsWith('- ') || line.startsWith('* ')) {
+      if (!inList) {
+        out.push('<ul>');
+        inList = true;
+      }
+      out.push(`<li>${formatInline(line.slice(2))}</li>`);
+    } else {
+      closeList();
+      out.push(`<p>${formatInline(line)}</p>`);
+    }
+  }
+  closeList();
+  return out.join('\n');
+};
+
+/**
+ * Build a print-ready HTML document for the AI-generated summary in a given
+ * language. Used by the "Download summary as PDF" button — the browser's
+ * print dialog renders this and the user picks "Save as PDF" as the
+ * destination.
+ */
+function buildSummaryPrintDoc(
+  doc: KnowledgeDocument,
+  summaryText: string,
+  summaryLang: TargetLang,
+  truncated: boolean
+): string {
+  const dir = summaryLang === 'ar' ? 'rtl' : 'ltr';
+  const fontStack =
+    summaryLang === 'ar'
+      ? `"Tahoma", "Arial", "Segoe UI", sans-serif`
+      : `-apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif`;
+  const listSidePadding =
+    summaryLang === 'ar'
+      ? 'padding-right: 22px; padding-left: 0'
+      : 'padding-left: 22px; padding-right: 0';
+
+  const generatedHuman = new Date().toLocaleString();
+  const generatedLabel: Record<TargetLang, string> = {
+    en: 'Generated',
+    ar: 'تم الإنشاء',
+    fr: 'Généré le',
+    es: 'Generado',
+  };
+  const summaryInLabel: Record<TargetLang, string> = {
+    en: 'AI summary — English',
+    ar: 'ملخص بالذكاء الاصطناعي — العربية',
+    fr: 'Résumé IA — Français',
+    es: 'Resumen IA — Español',
+  };
+
+  return `<!DOCTYPE html>
+<html lang="${summaryLang}" dir="${dir}">
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(doc.title)} — ${escapeHtml(summaryInLabel[summaryLang])}</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  html, body { background: #fff; }
+  body {
+    font-family: ${fontStack};
+    color: #222831;
+    line-height: 1.55;
+    max-width: 720px;
+    margin: 24px auto;
+    padding: 0 24px;
+    font-size: 12.5pt;
+  }
+  header {
+    border-bottom: 2px solid #00ADB5;
+    padding-bottom: 12px;
+    margin-bottom: 18px;
+  }
+  header h1 { font-size: 22px; margin: 0 0 4px; color: #222831; }
+  header .subtitle { font-size: 12px; color: #00ADB5; font-weight: 600; }
+  header .meta { font-size: 11px; color: #666; margin-top: 4px; }
+  h2 { font-size: 16px; color: #00ADB5; margin: 18px 0 8px; padding-bottom: 4px; border-bottom: 1px solid #eee; }
+  h3 { font-size: 14px; margin: 14px 0 6px; }
+  ul { ${listSidePadding}; margin: 6px 0; }
+  li { margin: 4px 0; }
+  p { margin: 6px 0; }
+  strong { color: #222831; }
+  em { color: #393E46; }
+  code { background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-family: "Menlo", "Consolas", monospace; font-size: 0.9em; }
+  footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid #eee; font-size: 10px; color: #888; }
+  .truncation-note { margin-top: 16px; padding: 10px 12px; background: #fff7e6; border: 1px solid #f0c674; border-radius: 6px; font-size: 11px; color: #7a4f00; }
+  @media print {
+    body { margin: 0; max-width: none; padding: 0; }
+    header { break-after: avoid; page-break-after: avoid; }
+    h2, h3 { break-after: avoid; page-break-after: avoid; }
+    li { break-inside: avoid; page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body dir="${dir}">
+  <header>
+    <h1>${escapeHtml(doc.title)}</h1>
+    <div class="subtitle">${escapeHtml(summaryInLabel[summaryLang])}</div>
+    <div class="meta">${escapeHtml(generatedLabel[summaryLang])} ${escapeHtml(generatedHuman)} · AidFlow Pro</div>
+  </header>
+  <main>
+${summaryMdToHtml(summaryText)}
+  </main>
+  ${
+    truncated
+      ? `<div class="truncation-note">Note: the source document is longer than the model can read in one pass; this summary covers only the beginning. Ask follow-up questions for later sections.</div>`
+      : ''
+  }
+  <footer>
+    AidFlow Pro · AI summary by Gemma 4 E4B · Source: ${escapeHtml(doc.source_filename || doc.title)}
+  </footer>
+</body>
+</html>`;
+}
 
 const CATEGORIES: KnowledgeDocument['category'][] = [
   'medical',
@@ -71,38 +249,99 @@ export default function KnowledgeBase() {
 
 // ===== Documents section =================================================
 
-// One in-flight summary (open card) at a time.
+// One in-flight summary (open card) at a time. The `progress` field is
+// populated only while the long-document map-reduce path is running —
+// it tells the UI which section is being read so we can show a status
+// strip in place of the "writing a summary…" loading text. Once token
+// deltas start streaming (i.e. the reduce step begins or single-pass
+// kicks in), `progress` stays as a contextual breadcrumb but the streamed
+// text is what the user actually reads.
 type SummaryState = {
   docId: string;
+  lang: TargetLang;
   text: string;
   truncated: boolean;
   done: boolean;
   error?: string;
+  progress?: {
+    stage: 'mapping' | 'reducing';
+    sectionIndex?: number;
+    totalSections?: number;
+  };
 };
 
 function DocumentsSection({ docs }: { docs: KnowledgeDocument[] }) {
   const { t } = useTranslation();
   const fileInput = useRef<HTMLInputElement>(null);
   const user = useAuthStore((s) => s.user);
-  const language = useSettingsStore((s) => s.language);
+  // The UI language is used as the default pre-highlight in the summarize
+  // language picker — the admin still has to confirm a choice.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _uiLang = useSettingsStore((s) => s.language);
 
   const [summary, setSummary] = useState<SummaryState | null>(null);
   const summaryBusy = useRef(false);
 
-  const startSummary = async (doc: KnowledgeDocument) => {
+  // Per-row "Summarize ▾" language picker — tracks which row is open.
+  const [summarizeMenu, setSummarizeMenu] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!summarizeMenu) return;
+    const close = () => setSummarizeMenu(null);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [summarizeMenu]);
+
+  const onSummarizeClick = (
+    e: React.MouseEvent<HTMLButtonElement>,
+    doc: KnowledgeDocument
+  ) => {
+    e.stopPropagation();
+    setSummarizeMenu(summarizeMenu === doc.doc_id ? null : doc.doc_id);
+  };
+
+  const startSummary = async (doc: KnowledgeDocument, chosenLang: TargetLang) => {
     if (summaryBusy.current) return;
     summaryBusy.current = true;
-    setSummary({ docId: doc.doc_id, text: '', truncated: false, done: false });
+    setSummarizeMenu(null);
+    setSummary({
+      docId: doc.doc_id,
+      lang: chosenLang,
+      text: '',
+      truncated: false,
+      done: false,
+    });
     try {
-      for await (const ev of summarizeDocumentStream(doc.doc_id, language)) {
+      for await (const ev of summarizeDocumentStream(doc.doc_id, chosenLang)) {
         if (ev.kind === 'delta') {
           setSummary((s) =>
             s && s.docId === doc.doc_id ? { ...s, text: s.text + ev.text } : s
           );
+        } else if (ev.kind === 'progress') {
+          // Long-doc map-reduce path — tell the user which section is
+          // being read or that the reduce step has started.
+          setSummary((s) =>
+            s && s.docId === doc.doc_id
+              ? {
+                  ...s,
+                  progress: {
+                    stage: ev.stage,
+                    sectionIndex: ev.sectionIndex,
+                    totalSections: ev.totalSections,
+                  },
+                }
+              : s
+          );
         } else if (ev.kind === 'done') {
           setSummary((s) =>
             s && s.docId === doc.doc_id
-              ? { ...s, done: true, truncated: ev.truncated }
+              ? {
+                  ...s,
+                  done: true,
+                  truncated: ev.truncated,
+                  // Clear the progress strip — we're done.
+                  progress: undefined,
+                }
               : s
           );
         }
@@ -127,6 +366,99 @@ function DocumentsSection({ docs }: { docs: KnowledgeDocument[] }) {
   };
 
   const closeSummary = () => setSummary(null);
+
+  // ---- Download helpers --------------------------------------------------
+  const triggerBlobDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  // Per-row "Download" button — single click, no menu. Hands the user the
+  // original PDF as it was uploaded. If the original blob is missing
+  // (uploaded pre-feature, or > MAX_ORIGINAL_BLOB_BYTES), surface an
+  // in-app notice instead of silently failing.
+  const downloadOriginal = (doc: KnowledgeDocument) => {
+    if (!doc.original_blob) {
+      setNotice({
+        kind: 'warning',
+        title: t('knowledge.no_original_title', 'Original PDF is not stored'),
+        body: t(
+          'knowledge.no_original_body',
+          'This document was uploaded before the original-PDF storage feature shipped (or the file was too large). Re-upload the PDF to enable original-language download.'
+        ),
+      });
+      return;
+    }
+    const filename = doc.source_filename || `${doc.title}.pdf`;
+    triggerBlobDownload(doc.original_blob, filename);
+  };
+
+  // Download the in-flight (or just-completed) summary as a PDF, via the
+  // browser's native print-to-PDF. Zero new dependency, RTL-correct,
+  // selectable text in the resulting file.
+  const downloadSummaryAsPdf = (
+    doc: KnowledgeDocument,
+    summaryText: string,
+    summaryLang: TargetLang,
+    truncated: boolean
+  ) => {
+    if (!summaryText.trim()) return;
+    const html = buildSummaryPrintDoc(doc, summaryText, summaryLang, truncated);
+    const win = window.open('', '_blank', 'width=820,height=900');
+    if (!win) {
+      setNotice({
+        kind: 'warning',
+        title: t('knowledge.popup_blocked_title', 'Pop-up blocked'),
+        body: t(
+          'knowledge.popup_blocked_body',
+          'Allow pop-ups for this site so the PDF export window can open.'
+        ),
+      });
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    const trigger = () => {
+      try {
+        win.focus();
+        win.print();
+      } catch {
+        // some browsers throw if the window was closed before print fires
+      }
+    };
+    if (win.document.readyState === 'complete') {
+      setTimeout(trigger, 80);
+    } else {
+      win.addEventListener('load', () => setTimeout(trigger, 80));
+    }
+  };
+
+  // Download the summary as a Markdown file. Includes a small front-matter
+  // block (title, language, generation timestamp) so the file is readable
+  // standalone.
+  const downloadSummaryAsMd = (
+    doc: KnowledgeDocument,
+    summaryText: string,
+    summaryLang: TargetLang,
+    truncated: boolean
+  ) => {
+    if (!summaryText.trim()) return;
+    const header = `# ${doc.title}\n\n_AI summary in ${langName(summaryLang)} · ${new Date().toLocaleString()} · AidFlow Pro / Gemma 4 E4B_\n\n---\n\n`;
+    const truncationNote = truncated
+      ? `\n\n---\n\n_Note: the source document is longer than the model can read in one pass; this summary covers only the beginning._\n`
+      : '';
+    const md = header + summaryText + truncationNote;
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const baseName = (doc.source_filename || doc.title).replace(/\.pdf$/i, '');
+    triggerBlobDownload(blob, `${baseName}_summary_${summaryLang}.md`);
+  };
 
   const [uploading, setUploading] = useState<string | null>(null);
   const [phase, setPhase] = useState<'extract' | 'embed' | 'save' | null>(null);
@@ -536,25 +868,75 @@ function DocumentsSection({ docs }: { docs: KnowledgeDocument[] }) {
                       )}
                     </div>
                   </div>
+                  {/* Summarize ▾ — pick a target language for the summary.
+                      Gemma 4 produces the summary directly in the chosen
+                      language (one AI call, no separate translate step).
+                      Disabled for scanned PDFs (no extractable text). */}
+                  <div className="relative">
+                    <button
+                      onClick={(e) => onSummarizeClick(e, d)}
+                      disabled={isStreaming || noChunks}
+                      title={
+                        noChunks
+                          ? t(
+                              'knowledge.scanned_tooltip',
+                              'No text extracted; cannot summarize a scanned PDF.'
+                            )
+                          : t('knowledge.summarize', 'Summarize')
+                      }
+                      className="touch-target px-2.5 py-1.5 bg-ai/10 hover:bg-ai/20 disabled:opacity-50 disabled:cursor-not-allowed text-ai border border-ai/30 rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                      aria-haspopup="menu"
+                      aria-expanded={summarizeMenu === d.doc_id}
+                      aria-label={t('knowledge.summarize', 'Summarize')}
+                    >
+                      <ScrollText size={13} />
+                      <span className="hidden sm:inline">
+                        {isStreaming
+                          ? t('knowledge.summarizing', 'Summarizing…')
+                          : t('knowledge.summarize', 'Summarize')}
+                      </span>
+                      <ChevronDown size={11} />
+                    </button>
+                    {summarizeMenu === d.doc_id && (
+                      <div
+                        className="absolute end-0 top-full mt-1 z-20 w-48 bg-surface border border-slate-700 rounded-lg shadow-xl py-1"
+                        role="menu"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                          {t('knowledge.summarize_in', 'Summarize in')}
+                        </div>
+                        {TARGET_LANGS.map((l) => (
+                          <button
+                            key={l.code}
+                            onClick={() => void startSummary(d, l.code)}
+                            className="w-full text-start px-3 py-1.5 text-xs text-slate-200 hover:bg-surface-light flex items-center justify-between gap-2"
+                            role="menuitem"
+                          >
+                            <span>{l.label}</span>
+                            <span className="text-slate-500 text-[11px]">{l.native}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Download — single click downloads the original PDF as
+                      it was uploaded. Icon-only; tooltip explains the action
+                      and surfaces the "no original stored" case. */}
                   <button
-                    onClick={() => void startSummary(d)}
-                    disabled={isStreaming || noChunks}
+                    onClick={() => downloadOriginal(d)}
                     title={
-                      noChunks
-                        ? t('knowledge.scanned_tooltip') ??
-                          'No text extracted; cannot summarize a scanned PDF.'
-                        : undefined
+                      !d.original_blob
+                        ? t('knowledge.no_original_title', 'Original PDF is not stored')
+                        : t('knowledge.download_original', 'Download original PDF')
                     }
-                    className="touch-target px-2.5 py-1.5 bg-ai/10 hover:bg-ai/20 disabled:opacity-50 disabled:cursor-not-allowed text-ai border border-ai/30 rounded-lg text-xs font-semibold flex items-center gap-1.5"
-                    aria-label={t('knowledge.summarize') ?? 'Summarize'}
+                    className="touch-target p-2 hover:bg-brand/10 hover:text-brand text-slate-300 rounded-lg"
+                    aria-label={t('knowledge.download_original', 'Download original PDF')}
                   >
-                    <ScrollText size={13} />
-                    <span className="hidden sm:inline">
-                      {isStreaming
-                        ? t('knowledge.summarizing') ?? 'Summarizing…'
-                        : t('knowledge.summarize') ?? 'Summarize'}
-                    </span>
+                    <Download size={16} />
                   </button>
+
                   <button
                     onClick={() => remove(d)}
                     className="touch-target p-2 hover:bg-red-500/10 hover:text-red-400 rounded-lg"
@@ -564,12 +946,15 @@ function DocumentsSection({ docs }: { docs: KnowledgeDocument[] }) {
                   </button>
                 </div>
 
-                {summarizing && (
+                {summarizing && summary && (
                   <div className="border-t border-slate-700 px-4 pt-3 pb-4 bg-surface-light/30">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="text-xs font-semibold text-ai flex items-center gap-1.5">
+                    <div className="flex items-center justify-between mb-2 gap-2">
+                      <div className="text-xs font-semibold text-ai flex items-center gap-1.5 flex-wrap">
                         <Sparkles size={12} />
                         {t('knowledge.ai_summary') ?? 'AI summary'}
+                        <span className="text-slate-400 font-normal">
+                          — {langName(summary.lang)}
+                        </span>
                         {isStreaming && (
                           <span className="text-slate-400 italic">
                             {' '}— {t('knowledge.summarizing') ?? 'streaming…'}
@@ -584,32 +969,96 @@ function DocumentsSection({ docs }: { docs: KnowledgeDocument[] }) {
                         <XIcon size={14} />
                       </button>
                     </div>
-                    {summary?.error ? (
+                    {summary.error ? (
                       <div className="text-xs text-priority-critical bg-priority-critical/10 border border-priority-critical/30 rounded-lg px-3 py-2 flex items-start gap-2">
                         <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
                         <span>{summary.error}</span>
                       </div>
                     ) : (
-                      <div className="prose-ai text-sm text-slate-200">
-                        {summary?.text ? (
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {summary.text}
-                          </ReactMarkdown>
-                        ) : (
-                          <span className="text-slate-400 italic text-xs">
-                            {t('knowledge.summary_loading') ??
-                              'Reading the document and writing a summary…'}
-                          </span>
+                      <>
+                        {/* Map-reduce progress strip — shown while the
+                            long-doc flow is reading per-section outlines
+                            (no streamed text yet). Disappears once the
+                            reduce step starts emitting deltas. */}
+                        {summary.progress && !summary.text && (
+                          <div className="mb-2 text-xs text-ai bg-ai/10 border border-ai/30 rounded-lg px-3 py-2 flex items-center gap-2">
+                            <Sparkles size={12} className="animate-pulse flex-shrink-0" />
+                            <span>
+                              {summary.progress.stage === 'mapping' &&
+                              summary.progress.sectionIndex != null &&
+                              summary.progress.totalSections != null
+                                ? t(
+                                    'knowledge.summary_section_progress',
+                                    {
+                                      defaultValue:
+                                        'Reading section {{n}} of {{total}}…',
+                                      n: summary.progress.sectionIndex,
+                                      total: summary.progress.totalSections,
+                                    }
+                                  )
+                                : summary.progress.stage === 'reducing'
+                                ? t(
+                                    'knowledge.summary_synthesizing',
+                                    'Synthesizing the final summary…'
+                                  )
+                                : t(
+                                    'knowledge.summary_loading',
+                                    'Reading the document and writing a summary…'
+                                  )}
+                            </span>
+                          </div>
                         )}
-                      </div>
+                        <div
+                          className="prose-ai text-sm text-slate-200 max-h-96 overflow-y-auto"
+                          dir={summary.lang === 'ar' ? 'rtl' : 'ltr'}
+                        >
+                          {summary.text ? (
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {summary.text}
+                            </ReactMarkdown>
+                          ) : !summary.progress ? (
+                            <span className="text-slate-400 italic text-xs">
+                              {t(
+                                'knowledge.summary_loading',
+                                'Reading the document and writing a summary…'
+                              )}
+                            </span>
+                          ) : null}
+                        </div>
+                      </>
                     )}
-                    {summary?.truncated && summary?.done && (
+                    {summary.truncated && summary.done && (
                       <div className="mt-3 text-[11px] text-priority-medium bg-priority-medium/10 border border-priority-medium/30 rounded-lg px-3 py-1.5 flex items-start gap-2">
                         <AlertTriangle size={11} className="mt-0.5 flex-shrink-0" />
                         <span>
                           {t('knowledge.summary_truncated') ??
                             'The document is longer than the model can read in one pass; the summary covers only the beginning. Ask follow-up questions for later sections.'}
                         </span>
+                      </div>
+                    )}
+                    {/* Summary download buttons — appear once the stream
+                        finishes successfully. The summary itself is the only
+                        source; we never re-call the model for the download. */}
+                    {summary.done && !summary.error && summary.text.trim() && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          onClick={() =>
+                            downloadSummaryAsPdf(d, summary.text, summary.lang, summary.truncated)
+                          }
+                          className="touch-target px-2.5 py-1.5 bg-brand/10 hover:bg-brand/20 text-brand border border-brand/30 rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                        >
+                          <Download size={12} />
+                          {t('knowledge.dl_summary_pdf', 'Download summary as PDF')}
+                        </button>
+                        <button
+                          onClick={() =>
+                            downloadSummaryAsMd(d, summary.text, summary.lang, summary.truncated)
+                          }
+                          className="touch-target px-2.5 py-1.5 bg-ai/10 hover:bg-ai/20 text-ai border border-ai/30 rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                        >
+                          <ScrollText size={12} />
+                          {t('knowledge.dl_summary_md', 'Download summary as Markdown')}
+                        </button>
                       </div>
                     )}
                   </div>

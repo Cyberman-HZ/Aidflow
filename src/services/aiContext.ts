@@ -15,7 +15,6 @@ import type {
   AidGuide,
   KidsContent,
   StarlinkReseller,
-  BitchatMessage,
   Continent,
   Worker,
 } from '@/types';
@@ -28,11 +27,10 @@ export interface AppSnapshot {
   guides: AidGuide[];
   kids: KidsContent[];
   resellers: StarlinkReseller[];
-  messages: BitchatMessage[];
 }
 
 export async function loadAppSnapshot(): Promise<AppSnapshot> {
-  const [families, distributions, workers, documents, guides, kids, resellers, messages] =
+  const [families, distributions, workers, documents, guides, kids, resellers] =
     await Promise.all([
       db.families.toArray(),
       db.distributions.toArray(),
@@ -41,9 +39,8 @@ export async function loadAppSnapshot(): Promise<AppSnapshot> {
       db.guides.toArray(),
       db.kids.toArray(),
       db.resellers.toArray(),
-      db.messages.toArray(),
     ]);
-  return { families, distributions, workers, documents, guides, kids, resellers, messages };
+  return { families, distributions, workers, documents, guides, kids, resellers };
 }
 
 function familiesBlock(families: Family[]): string {
@@ -275,21 +272,6 @@ function resellersBlock(resellers: StarlinkReseller[]): string {
   return `## STARLINK AUTHORIZED RETAILERS (${resellers.length}, official Starlink list)\n${lines.join('\n')}\n`;
 }
 
-function messagesBlock(m: BitchatMessage[]): string {
-  if (m.length === 0) return '## BITCHAT\n— no messages —\n';
-  const channels = Array.from(new Set(m.map((x) => x.channel))).sort();
-  const queued = m.filter((x) => x.status === 'queued' || x.status === 'failed').length;
-  const recent = [...m]
-    .sort((a, b) => b.sent_at.localeCompare(a.sent_at))
-    .slice(0, 30)
-    .reverse();
-  const lines = recent.map(
-    (x) =>
-      `${x.channel} | ${x.author} | ${x.sent_at.slice(0, 16).replace('T', ' ')} | status:${x.status}${x.delivered_via ? ' via:' + x.delivered_via : ''} | ${x.body}`
-  );
-  return `## BITCHAT — channels: ${channels.join(', ')} | messages: ${m.length}, ${queued} queued/failed (showing last ${recent.length})\n${lines.join('\n')}\n`;
-}
-
 function dashboardBlock(snap: AppSnapshot): string {
   const today = new Date().toISOString().slice(0, 10);
   const deliveredToday = snap.distributions.filter(
@@ -345,7 +327,7 @@ export function buildSystemPrompt(snap: AppSnapshot, opts: BuildOpts): string {
   return [
     `You are AidFlow Pro's organizational AI assistant, powered by Gemma 4. Always respond in ${langName}.`,
     ``,
-    `You have READ access to a snapshot of every module in the app: families, distributions (full order detail), workers, knowledge base, aid usage guides, children content library, Starlink country availability + authorized retailers, Bitchat messages, and dashboard stats. You do NOT have access to user account settings or system configuration.`,
+    `You have READ access to a snapshot of every module in the app: families, distributions (full order detail), workers, knowledge base, aid usage guides, children content library, Starlink country availability + authorized retailers, and dashboard stats. You do NOT have access to user account settings or system configuration.`,
     ``,
     `## Rules`,
     `1. Only reference data that appears in the snapshot below. Never invent IDs, names, countries, retailers, order numbers, or facts.`,
@@ -355,10 +337,9 @@ export function buildSystemPrompt(snap: AppSnapshot, opts: BuildOpts): string {
     `5. For Starlink coverage questions, use STARLINK COUNTRY AVAILABILITY. For retailer questions, use STARLINK AUTHORIZED RETAILERS.`,
     `6. For ANY question about a distribution order, look up the matching order and report EVERY relevant field. Always lead with the ORD-### number.`,
     `7. For workers questions, use the WORKERS section. Refer to them by "First Last (Position)" not by their internal W-… id.`,
-    `8. For team coordination questions, use the BITCHAT section.`,
-    `9. For high-level summaries, use the TODAY'S DASHBOARD section.`,
-    `10. If the question requires data outside this snapshot, say so plainly. Never fabricate.`,
-    `11. Be concise. Use bulleted lists when listing multiple records. Avoid markdown tables.`,
+    `8. For high-level summaries, use the TODAY'S DASHBOARD section.`,
+    `9. If the question requires data outside this snapshot, say so plainly. Never fabricate.`,
+    `10. Be concise. Use bulleted lists when listing multiple records. Avoid markdown tables.`,
     ``,
     `# APP SNAPSHOT`,
     dashboardBlock(snap),
@@ -370,7 +351,6 @@ export function buildSystemPrompt(snap: AppSnapshot, opts: BuildOpts): string {
     kidsBlock(snap.kids),
     starlinkCountriesBlock(),
     resellersBlock(snap.resellers),
-    messagesBlock(snap.messages),
   ].join('\n');
 }
 

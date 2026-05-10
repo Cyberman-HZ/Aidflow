@@ -11,7 +11,7 @@
 // family_id is immutable once a family exists. For new families it's auto
 // generated as "F-{timestamp-base36}" so it's short and unique.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   X,
@@ -21,10 +21,21 @@ import {
   AlertTriangle,
   UserPlus,
   Edit2,
+  FileSpreadsheet,
+  SkipForward,
+  Sparkles,
+  HelpCircle,
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
 import { computeRuleScore } from '@/services/priorityRules';
+import {
+  parseSpreadsheet,
+  proposeColumnMapping,
+  coerceRow,
+  type ColumnMapping,
+  type CoercedRow,
+} from '@/services/spreadsheetImport';
 import type {
   Family,
   DisplacementStatus,
@@ -117,6 +128,114 @@ export default function FamilyEditModal({
   const [newSeverity, setNewSeverity] = useState<Severity>('chronic');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // ---- Spreadsheet-import wizard state --------------------------------
+  // Active only while the admin is walking through rows from a CSV/XLSX.
+  // Each Save advances to the next row and refills the form. Skip jumps
+  // ahead without saving. Cancel exits wizard mode but leaves whatever's
+  // currently in the form so the admin can finish manually if they want.
+  const [importQueue, setImportQueue] = useState<CoercedRow[]>([]);
+  const [importIndex, setImportIndex] = useState(0);
+  const [importMapping, setImportMapping] = useState<ColumnMapping | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Tooltip popover next to the Import button — explains the recommended
+  // column headers so the admin knows how to format their spreadsheet.
+  const [tipOpen, setTipOpen] = useState(false);
+  useEffect(() => {
+    if (!tipOpen) return;
+    const close = () => setTipOpen(false);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [tipOpen]);
+
+  const inWizard = importQueue.length > 0;
+  const currentRowNumber = inWizard ? importIndex + 1 : 0;
+  const totalRows = importQueue.length;
+
+  // Push one coerced row's fields into every form setter. This is the
+  // bridge between the import service and the existing form. Defaults are
+  // applied for fields the row didn't touch so leftover values from a
+  // previous row don't bleed in.
+  const fillFormFromRow = (row: CoercedRow) => {
+    const f = row.family;
+    setHeadName(f.head_name ?? '');
+    setMemberCount(Math.max(1, f.member_count ?? 1));
+    setChildrenUnder5(f.children_under_5 ?? 0);
+    setElderlyCount(f.elderly_count ?? 0);
+    setHasPregnant(!!f.has_pregnant_member);
+    setMedicalConditions(Array.isArray(f.medical_conditions) ? f.medical_conditions : []);
+    setDisplacementStatus(f.displacement_status ?? 'resident');
+    setIncomeLevel(f.income_level ?? 'minimal');
+    setLocationSector(f.location_sector ?? '');
+    setStreet(f.street ?? '');
+    setCity(f.city ?? '');
+    setNotes(f.notes ?? '');
+    // Coordinates are not part of the import flow — leave blank.
+    setLatStr('');
+    setLngStr('');
+    // Reset the in-progress condition input so it doesn't carry over.
+    setNewCondition('');
+    setError(null);
+  };
+
+  const startImport = async (file: File) => {
+    setImportError(null);
+    setImporting(true);
+    try {
+      const parsed = await parseSpreadsheet(file);
+      const mapping = await proposeColumnMapping(parsed.headers, parsed.rows);
+      const coerced: CoercedRow[] = parsed.rows.map((r, i) =>
+        coerceRow(r, mapping.mapping, i + 1)
+      );
+      if (coerced.length === 0) {
+        setImportError(
+          t(
+            'import.empty_file',
+            'No data rows found in the spreadsheet.'
+          )
+        );
+        return;
+      }
+      setImportMapping(mapping);
+      setImportQueue(coerced);
+      setImportIndex(0);
+      fillFormFromRow(coerced[0]);
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const advanceImport = () => {
+    const nextIdx = importIndex + 1;
+    if (nextIdx >= importQueue.length) {
+      // Wizard finished — exit cleanly. The modal will close via the
+      // existing onClose() flow in handleSave.
+      setImportQueue([]);
+      setImportIndex(0);
+      setImportMapping(null);
+      return false;
+    }
+    setImportIndex(nextIdx);
+    fillFormFromRow(importQueue[nextIdx]);
+    return true;
+  };
+
+  const skipImportRow = () => {
+    if (!inWizard) return;
+    advanceImport();
+  };
+
+  const cancelImport = () => {
+    setImportQueue([]);
+    setImportIndex(0);
+    setImportMapping(null);
+    setImportError(null);
+  };
 
   // Pull all existing sector names so the user can pick from what's already
   // in the database (avoids typos / sector fragmentation).
@@ -220,7 +339,17 @@ export default function FamilyEditModal({
       }
 
       await db.families.put(family);
-      onClose();
+      // In wizard mode, advance to the next row instead of closing — the
+      // admin keeps reviewing each imported family in turn. Only the very
+      // last row's save closes the modal.
+      if (inWizard) {
+        const advanced = advanceImport();
+        if (!advanced) {
+          onClose();
+        }
+      } else {
+        onClose();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -266,6 +395,274 @@ export default function FamilyEditModal({
             <X size={16} />
           </button>
         </header>
+
+        {/* Spreadsheet-import affordance — only on create (no point in
+            replacing fields when editing an existing family). Two states:
+            (1) the trigger row when no import is in flight, (2) the
+            wizard banner showing "row N of M" while walking through. */}
+        {!isEditing && (
+          <div className="px-5 pt-3">
+            {!inWizard ? (
+              <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-surface-light/50 border border-slate-700">
+                <div className="flex items-center gap-2 text-xs text-slate-300">
+                  <FileSpreadsheet size={14} className="text-brand" />
+                  <span>
+                    {t(
+                      'import.inline_hint',
+                      'Have a spreadsheet of families? Import each row into this form for review.'
+                    )}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {/* Help affordance — click to see the recommended column
+                      headers so the admin can format their spreadsheet
+                      correctly before importing. */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setTipOpen((v) => !v);
+                      }}
+                      title={t(
+                        'import.tip_button_title',
+                        'Show recommended column headers'
+                      )}
+                      aria-label={t(
+                        'import.tip_button_title',
+                        'Show recommended column headers'
+                      )}
+                      aria-expanded={tipOpen}
+                      className="touch-target p-1.5 hover:bg-brand/10 hover:text-brand text-slate-400 rounded-lg"
+                    >
+                      <HelpCircle size={14} />
+                    </button>
+                    {tipOpen && (
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        role="tooltip"
+                        className="absolute end-0 top-full mt-1 z-30 w-[340px] max-w-[calc(100vw-2rem)] bg-surface border border-slate-700 rounded-lg shadow-xl p-3 text-xs text-slate-200"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="font-semibold text-brand text-[11px] uppercase tracking-wider">
+                            {t('import.tip_title', 'Recommended column headers')}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setTipOpen(false)}
+                            className="touch-target p-1 hover:bg-surface-light rounded text-slate-400 hover:text-slate-200"
+                            aria-label={t('common.close', 'Close')}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                        <table className="w-full">
+                          <thead>
+                            <tr className="text-[10px] text-slate-500 uppercase tracking-wider">
+                              <th className="text-start font-medium pb-1">
+                                {t('import.tip_col_header', 'Header')}
+                              </th>
+                              <th className="text-start font-medium pb-1 ps-2">
+                                {t('import.tip_col_format', 'Expected value')}
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="space-y-0.5">
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">Head of Household</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                {t('import.tip_required', 'required, free text')}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">Sector</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                {t('import.tip_sector', 'camp / area / district')}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">Total Members</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                {t('import.tip_int_ge_1', 'integer ≥ 1')}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">Children under 5</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                {t('import.tip_int_ge_0', 'integer ≥ 0')}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">Elderly (65+)</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                {t('import.tip_int_ge_0', 'integer ≥ 0')}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">Pregnant Member</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                {t('import.tip_yesno', 'Yes / No')}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">Displacement Status</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                resident · recently_displaced · refugee
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">Income Level</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                none · minimal · moderate
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">Medical Conditions</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                {t('import.tip_csv_list', 'comma-separated list')}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">Street</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                {t('import.tip_optional', 'optional')}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">City</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                {t('import.tip_optional', 'optional')}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="font-medium text-slate-100 py-0.5">Notes</td>
+                              <td className="text-slate-400 ps-2 py-0.5">
+                                {t('import.tip_optional', 'optional, free text')}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                        <div className="mt-2 pt-2 border-t border-slate-700 text-[11px] text-slate-400 leading-relaxed">
+                          {t(
+                            'import.tip_synonyms',
+                            'Headers don\'t need to match exactly — synonyms work (e.g. "HoH", "Household Head", "IDP" → recently_displaced).'
+                          )}{' '}
+                          <span className="text-slate-300">
+                            {t(
+                              'import.tip_unmapped',
+                              'Unmapped columns are saved into Notes.'
+                            )}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-[10px] text-slate-500 italic">
+                          {t(
+                            'import.tip_id_note',
+                            'Family IDs are generated automatically — do not include them.'
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                      fileInputRef.current?.click();
+                    }}
+                    disabled={importing}
+                    className="touch-target px-2.5 py-1.5 bg-brand/10 hover:bg-brand/20 disabled:opacity-50 text-brand border border-brand/30 rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                  >
+                    <FileSpreadsheet size={12} />
+                    {importing
+                      ? t('import.parsing_short', 'Reading…')
+                      : t('import.button_label', 'Import')}
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void startImport(f);
+                      e.target.value = '';
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="px-3 py-2 rounded-lg bg-brand/10 border border-brand/30 flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2 text-xs text-brand font-semibold flex-wrap">
+                  <FileSpreadsheet size={14} />
+                  <span>
+                    {t('import.wizard_progress', 'Importing row {{n}} of {{total}}', {
+                      n: currentRowNumber,
+                      total: totalRows,
+                    })}
+                  </span>
+                  {importMapping?.source === 'ai' && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-ai/20 text-ai inline-flex items-center gap-1">
+                      <Sparkles size={9} />
+                      {t('import.ai_badge', 'Mapped by Gemma 4')}
+                    </span>
+                  )}
+                  {importMapping?.source === 'heuristic' && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-priority-medium/20 text-priority-medium inline-flex items-center gap-1">
+                      <AlertTriangle size={9} />
+                      {t('import.heuristic_badge', 'Heuristic mapping (Ollama offline)')}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={skipImportRow}
+                    disabled={saving}
+                    className="touch-target px-2.5 py-1.5 bg-surface-light hover:bg-slate-600 disabled:opacity-50 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1"
+                    title={t(
+                      'import.skip_row_tooltip',
+                      'Discard this row and move to the next'
+                    )}
+                  >
+                    <SkipForward size={11} />
+                    {t('import.skip_row', 'Skip')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelImport}
+                    disabled={saving}
+                    className="touch-target px-2.5 py-1.5 hover:bg-priority-critical/10 hover:text-priority-critical disabled:opacity-50 text-slate-400 rounded-lg text-xs font-semibold flex items-center gap-1"
+                    title={t(
+                      'import.cancel_tooltip',
+                      'Stop the import — remaining rows are discarded'
+                    )}
+                  >
+                    <X size={11} />
+                    {t('import.cancel_import', 'Cancel import')}
+                  </button>
+                </div>
+              </div>
+            )}
+            {importError && (
+              <div className="mt-2 px-3 py-2 rounded-lg bg-priority-critical/10 border border-priority-critical/30 text-priority-critical text-xs flex items-start gap-2">
+                <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+                <span>{importError}</span>
+              </div>
+            )}
+            {/* Per-row warnings from the coercion step (e.g. "income value
+                fell back to default") — not blocking, but worth showing. */}
+            {inWizard && importQueue[importIndex]?.warnings.length > 0 && (
+              <div className="mt-2 px-3 py-2 rounded-lg bg-priority-medium/10 border border-priority-medium/30 text-priority-medium text-[11px] flex items-start gap-2">
+                <AlertTriangle size={11} className="mt-0.5 flex-shrink-0" />
+                <ul className="space-y-0.5 flex-1">
+                  {importQueue[importIndex].warnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="px-5 py-4 space-y-4 overflow-y-auto">
           {/* Head of household */}
@@ -547,6 +944,10 @@ export default function FamilyEditModal({
               <Save size={14} />{' '}
               {saving
                 ? t('common.saving')
+                : inWizard
+                ? importIndex < importQueue.length - 1
+                  ? t('import.save_and_next', 'Save & next')
+                  : t('import.save_and_finish', 'Save & finish')
                 : isEditing
                 ? t('families_edit.save')
                 : t('families_edit.create')}
