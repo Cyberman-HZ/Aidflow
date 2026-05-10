@@ -20,9 +20,22 @@ import type {
 import { useSettingsStore } from '@/stores/settingsStore';
 import { computeRuleScore } from './priorityRules';
 import { db } from '@/db/database';
+import {
+  executeReadTool,
+  isWriteTool,
+  parseToolArgs,
+  type ToolCall,
+  type ToolContext,
+  type ToolDefinition,
+} from './aiTools';
 
 interface ChatResponse {
-  message?: { role: string; content: string };
+  message?: {
+    role: string;
+    content: string;
+    /** Ollama's native tool-calling field, parallel to OpenAI's tool_calls. */
+    tool_calls?: ToolCall[];
+  };
   done?: boolean;
 }
 
@@ -265,6 +278,204 @@ export async function prioritizeFamilies(
     console.warn('[ollama] prioritization parse failed — using rule fallback', e);
     return families.map((f) => computeRuleScore(f));
   }
+}
+
+// ---------- Tool calling (native function calling) ------------------------
+//
+// Gemma 4 supports native function calling. We pass a `tools` array to
+// Ollama's /api/chat endpoint (OpenAI-compatible schema). The model can
+// either reply with text OR with a `tool_calls` array. When tools are
+// called we:
+//
+//   1. For READ tools — execute them automatically against IndexedDB,
+//      append the result as a `role: "tool"` turn, and ask the model again
+//      so it can synthesize a final natural-language answer.
+//   2. For WRITE tools — DO NOT execute. We return them to the caller so
+//      the AIChat component can render an Apply/Discard card. The model
+//      gets a `{ "status": "proposed_to_user" }` tool response so it can
+//      finish its sentence ("Drafted a dispatch for review.") without
+//      thinking the write already happened.
+//
+// The loop bounds: at most 5 model rounds. This is enough for a query like
+// "find critical WASH families and draft dispatches" (find_families →
+// find_workers → N draft_dispatch_order calls) but small enough that a
+// stuck model cannot burn the laptop's CPU.
+
+export interface ToolMessage {
+  role: 'tool';
+  /** JSON-encoded payload returned by the tool. */
+  content: string;
+  /** Name of the tool that produced this payload (Ollama-native field). */
+  tool_name?: string;
+}
+
+export interface AssistantToolMessage {
+  role: 'assistant';
+  content: string;
+  tool_calls?: ToolCall[];
+}
+
+type ToolLoopMessage = ChatMessage | ToolMessage | AssistantToolMessage;
+
+export interface ToolReadEvent {
+  kind: 'read';
+  name: string;
+  args: Record<string, unknown>;
+  result: unknown;
+  error?: string;
+}
+
+export interface ToolWriteEvent {
+  kind: 'write';
+  call: ToolCall;
+}
+
+export type ToolEvent = ToolReadEvent | ToolWriteEvent;
+
+export interface ChatWithToolsResult {
+  /** The final assistant text (may be empty if the run ended on writes). */
+  text: string;
+  /** Every read tool that was auto-executed. */
+  reads: ToolReadEvent[];
+  /** Every write tool the model proposed (awaiting user confirmation). */
+  writes: ToolWriteEvent[];
+  /** True if the loop hit its step cap. */
+  truncated: boolean;
+}
+
+const MAX_TOOL_STEPS = 5;
+
+/**
+ * Run a chat with function-calling enabled. Read tools are auto-executed;
+ * write tools are returned to the caller so the UI can surface them as
+ * Apply/Discard cards.
+ */
+export async function chatWithTools(
+  messages: ChatMessage[],
+  tools: ToolDefinition[],
+  ctx: ToolContext,
+  opts: ChatOpts = {}
+): Promise<ChatWithToolsResult> {
+  const { baseUrl, model } = getConfig();
+  const convo: ToolLoopMessage[] = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+  const reads: ToolReadEvent[] = [];
+  const writes: ToolWriteEvent[] = [];
+  let truncated = false;
+  let finalText = '';
+
+  for (let step = 0; step < MAX_TOOL_STEPS; step++) {
+    const body = {
+      model,
+      messages: convo.map((m) => {
+        // Strip undefineds so Ollama is happy.
+        const out: Record<string, unknown> = { role: m.role, content: m.content };
+        if ('tool_calls' in m && m.tool_calls) out.tool_calls = m.tool_calls;
+        if ('tool_name' in m && m.tool_name) out.tool_name = m.tool_name;
+        return out;
+      }),
+      tools,
+      stream: false,
+      options: {
+        num_ctx: opts.numCtx ?? DEFAULT_NUM_CTX,
+        temperature: opts.temperature ?? 0.3,
+        num_predict: opts.maxTokens ?? 1024,
+      },
+    };
+
+    const res = await withTimeout(
+      (signal) =>
+        fetch(`${baseUrl}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal,
+        }),
+      120_000
+    );
+    if (!res.ok) {
+      throw new Error(`Ollama chat (tools) failed: ${res.status} ${res.statusText}`);
+    }
+    const data = (await res.json()) as ChatResponse;
+    const message = data.message;
+    if (!message) {
+      throw new Error('Ollama returned no message');
+    }
+
+    const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+
+    // Record the assistant turn so subsequent tool responses are attached
+    // to the right call. We always push it whether or not it has tool calls,
+    // so the model sees its own prior reasoning in the next step.
+    convo.push({
+      role: 'assistant',
+      content: message.content ?? '',
+      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+    });
+
+    if (toolCalls.length === 0) {
+      // No more tool calls — done.
+      finalText = message.content ?? '';
+      break;
+    }
+
+    // Partition: read calls run now; write calls bubble up.
+    let didRead = false;
+    for (const call of toolCalls) {
+      const name = call.function?.name;
+      if (!name) continue;
+      const args = parseToolArgs(call);
+
+      if (isWriteTool(name)) {
+        writes.push({ kind: 'write', call });
+        // Tell the model the write is in the user's hands so it stops
+        // looping and doesn't pretend the change is already committed.
+        convo.push({
+          role: 'tool',
+          content: JSON.stringify({ status: 'proposed_to_user' }),
+          tool_name: name,
+        });
+      } else {
+        didRead = true;
+        try {
+          const result = await executeReadTool(name, args, ctx);
+          reads.push({ kind: 'read', name, args, result });
+          convo.push({
+            role: 'tool',
+            content: JSON.stringify(result),
+            tool_name: name,
+          });
+        } catch (e) {
+          const err = e instanceof Error ? e.message : String(e);
+          reads.push({ kind: 'read', name, args, result: null, error: err });
+          convo.push({
+            role: 'tool',
+            content: JSON.stringify({ error: err }),
+            tool_name: name,
+          });
+        }
+      }
+    }
+
+    // If the model ONLY proposed writes (no reads to chew on), give it one
+    // more turn so it can produce a confirmation sentence ("Drafted N
+    // dispatches — please review."). If didRead is true, we always loop
+    // again so the model sees the read results.
+    if (!didRead) {
+      // One more pass so it can summarize the writes it proposed.
+      // Falls through to next step iteration.
+    }
+
+    if (step === MAX_TOOL_STEPS - 1) {
+      truncated = true;
+      // Final text is whatever the last assistant content was.
+      finalText = message.content ?? finalText;
+    }
+  }
+
+  return { text: finalText, reads, writes, truncated };
 }
 
 // ---------- Family update — recompute score after distribution -----------
