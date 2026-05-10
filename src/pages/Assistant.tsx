@@ -150,6 +150,7 @@ export default function Assistant() {
         <AIChat
           systemPrompt={systemPrompt}
           enableRag
+          enableTools
           placeholder={t('assistant.placeholder')}
           suggestedPrompts={[
             {

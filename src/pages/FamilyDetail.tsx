@@ -196,6 +196,7 @@ Be concise. Reference the family's specific situation. When the user asks for a 
             placeholder={t('assistant.placeholder')}
             family={familyForAI}
             history={history}
+            enableTools
           />
         </div>
       </div>

@@ -17,6 +17,12 @@ dist
 dist-ssr
 *.local
 build/
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js
+
+# Claude Code local settings
+.claude/settings.local.json
 
 # Editor
 .vscode/*

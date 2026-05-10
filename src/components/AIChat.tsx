@@ -17,7 +17,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { AidDistribution, ChatMessage, Family } from '@/types';
-import { chatStream, chat } from '@/services/ollama';
+import { chatStream, chat, chatWithTools, pingOllama } from '@/services/ollama';
 import { ragAnswerStream } from '@/services/rag';
 import { wikipediaContext } from '@/services/webSearch';
 import {
@@ -29,6 +29,15 @@ import {
   stripFamilyActions,
   type FamilyAction,
 } from '@/services/familyActions';
+import {
+  applyToolCall,
+  commitDraftOrder,
+  describeToolCall,
+  getToolDefinitions,
+  parseToolArgs,
+  type ToolCall,
+} from '@/services/aiTools';
+import { useAuthStore } from '@/stores/authStore';
 import { detectIntent } from '@/services/familyIntent';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
@@ -118,6 +127,57 @@ function summarizeDistribution(d: AidDistribution): string {
     ? ` reason="${sanitizeForPrompt(d.failure_reason, 80)}"`
     : '';
   return `${when} ${d.status} ${order} by=${sanitizeForPrompt(by, 40)} items=[${items}]${reason}`;
+}
+
+/**
+ * One-line summary of a tool call's arguments, for the inline "tool chip"
+ * that appears above the assistant bubble. Keeps the chip compact —
+ * full arguments are visible on hover via the title attribute.
+ */
+function summarizeToolArgs(args: Record<string, unknown>): string {
+  const entries = Object.entries(args).filter(
+    ([, v]) => v !== undefined && v !== null && v !== ''
+  );
+  if (entries.length === 0) return '';
+  return entries
+    .slice(0, 4)
+    .map(([k, v]) => {
+      if (Array.isArray(v)) return `${k}=[${v.length}]`;
+      if (typeof v === 'object') return `${k}={…}`;
+      return `${k}=${String(v).slice(0, 30)}`;
+    })
+    .join(', ');
+}
+
+/**
+ * One-line summary of a tool result. We don't dump the full JSON — that
+ * would blow the chat width — just enough so the admin can see what the
+ * AI found and trust the answer that follows.
+ */
+function summarizeToolResult(name: string, result: unknown): string {
+  if (result == null) return '';
+  if (typeof result !== 'object') return String(result).slice(0, 80);
+  const r = result as Record<string, unknown>;
+  if (typeof r.error === 'string') return `error: ${r.error}`;
+  if (Array.isArray(r.families)) {
+    const matched = typeof r.matched === 'number' ? r.matched : r.families.length;
+    return `${matched} family/families matched`;
+  }
+  if (Array.isArray(r.distributions)) {
+    return `${r.total ?? r.distributions.length} distribution(s)`;
+  }
+  if (Array.isArray(r.workers)) {
+    return `${r.workers.length} worker(s)`;
+  }
+  if (Array.isArray(r.orders)) {
+    return `${r.total ?? r.orders.length} active order(s)`;
+  }
+  if (typeof r.head_name === 'string') {
+    return `${r.head_name} (${r.family_id ?? ''})`;
+  }
+  // Fallback — top-level key snapshot
+  const keys = Object.keys(r).slice(0, 4).join(', ');
+  return keys || 'OK';
 }
 
 function buildInlineContext(
@@ -212,6 +272,39 @@ interface AIChatProps {
    * drifts, never hallucinates.
    */
   suggestedPrompts?: ReadonlyArray<{ label: string; reply: string }>;
+  /**
+   * Enable Gemma 4's native function-calling. When true and Ollama is
+   * reachable, every user message is sent with the AidFlow tool catalog;
+   * the model can call read tools (auto-executed, results fed back) and
+   * propose write tools (surfaced as Apply/Discard cards). The legacy
+   * fenced-`aidflow-action` JSON protocol still runs as a fallback for
+   * older Gemma builds that don't emit `tool_calls`.
+   */
+  enableTools?: boolean;
+}
+
+// Status lifecycle of an AI-proposed action (text-protocol or tool call).
+//   pending     — awaiting Apply / Discard
+//   applying    — Apply clicked, write in flight
+//   applied     — successfully committed
+//   discarded   — user declined
+//   failed      — apply threw (error stored in errorByKey)
+type ActionStatus = 'pending' | 'applying' | 'applied' | 'discarded' | 'failed';
+
+interface ToolReadDisplay {
+  name: string;
+  argsSummary: string;
+  resultSummary: string;
+  error?: string;
+}
+
+interface ToolWriteDisplay {
+  call: ToolCall;
+  description: string;
+  status: ActionStatus;
+  error?: string;
+  /** Filled when committed — what to show next to "Applied". */
+  appliedNote?: string;
 }
 
 export default function AIChat({
@@ -226,10 +319,12 @@ export default function AIChat({
   family,
   history,
   suggestedPrompts,
+  enableTools = false,
 }: AIChatProps) {
   const { t } = useTranslation();
   const language = useSettingsStore((s) => s.language);
   const internetUp = useConnectivityStore((s) => s.internetUp);
+  const user = useAuthStore((s) => s.user);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [thinking, setThinking] = useState(false);
@@ -239,14 +334,13 @@ export default function AIChat({
   const [useRag, setUseRag] = useState(forceRag);
   const [useWiki, setUseWiki] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Tracks the lifecycle of each AI-proposed family action by message index.
-  //   pending     — awaiting Apply / Discard
-  //   applied     — successfully written to IndexedDB
-  //   discarded   — user declined
-  //   failed      — apply threw (error stored in errorByKey)
-  type ActionStatus = 'pending' | 'applying' | 'applied' | 'discarded' | 'failed';
   const [actionStatus, setActionStatus] = useState<Record<string, ActionStatus>>({});
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
+  // Tool-call surfaces, keyed by the assistant message index (one row per AI
+  // turn). Reads are auto-executed; writes are surfaced as Apply/Discard
+  // cards next to the text reply.
+  const [toolReadsByMsg, setToolReadsByMsg] = useState<Record<number, ToolReadDisplay[]>>({});
+  const [toolWritesByMsg, setToolWritesByMsg] = useState<Record<number, ToolWriteDisplay[]>>({});
 
   // Live list of distinct sectors used across all families. Passed into the
   // AI action prompt so Gemma 4 can only propose sector changes to values
@@ -438,6 +532,109 @@ export default function AIChat({
             });
           }
         }
+      } else if (enableTools && (await pingOllama())) {
+        // ============================================================
+        // NATIVE FUNCTION-CALLING PATH (Gemma 4 + Ollama /api/chat tools)
+        // ============================================================
+        // We send the entire AidFlow tool catalog. The model can call READ
+        // tools (auto-executed, results round-tripped) and propose WRITE
+        // tools (surfaced as Apply/Discard cards in the UI). The legacy
+        // fenced-`aidflow-action` protocol is left in place as a fallback
+        // for older Gemma builds that don't emit `tool_calls`.
+        const baseSys = systemPrompt
+          ? systemPrompt
+          : `You are AidFlow Pro's humanitarian field assistant powered by Gemma 4. You have access to function-calling tools that read and write the local IndexedDB. Use them whenever the user asks a factual question about families, distributions, workers, or orders, or whenever they ask you to change a record. Always call tools instead of guessing. After a write tool is proposed, the admin will Apply or Discard it — do NOT claim the change is done. Respond in ${
+              language === 'ar' ? 'Arabic' : language === 'fr' ? 'French' : language === 'es' ? 'Spanish' : 'English'
+            }. Be concise.`;
+        const sysContent = baseSys + wikiBlock + wikiInstruction;
+        const sys: ChatMessage = { role: 'system', content: sysContent };
+        const conversation = [sys, ...modelConversation];
+        const tools = getToolDefinitions({
+          scopedFamilyId: freshFamily?.family_id,
+        });
+
+        // Reserve the assistant bubble slot up-front so we have a stable
+        // index for routing reads/writes to it.
+        const placeholderMsg: ChatMessage = {
+          role: 'assistant',
+          content: t('assistant.thinking_tools') ?? 'Calling tools…',
+          timestamp: new Date().toISOString(),
+          citations: allCitations.length ? allCitations : undefined,
+        };
+        let assistantIdx = -1;
+        setMessages((m) => {
+          assistantIdx = m.length;
+          return [...m, placeholderMsg];
+        });
+
+        try {
+          const result = await chatWithTools(
+            conversation,
+            tools,
+            { scopedFamilyId: freshFamily?.family_id },
+            { temperature: 0.3, maxTokens: 1024 }
+          );
+
+          // Stash the read events as compact chips and the write proposals
+          // as Apply/Discard cards. We do this BEFORE updating the message
+          // text so the bubble shows everything at once.
+          const reads: ToolReadDisplay[] = result.reads.map((ev) => ({
+            name: ev.name,
+            argsSummary: summarizeToolArgs(ev.args),
+            resultSummary: summarizeToolResult(ev.name, ev.result),
+            error: ev.error,
+          }));
+          const writes: ToolWriteDisplay[] = result.writes.map((ev) => ({
+            call: ev.call,
+            description: describeToolCall(ev.call),
+            status: 'pending' as const,
+          }));
+
+          setMessages((m) => {
+            const copy = [...m];
+            const idx = copy.length - 1; // last message is our placeholder
+            copy[idx] = {
+              ...copy[idx],
+              content:
+                result.text ||
+                (writes.length > 0
+                  ? t('assistant.proposed_changes') ?? 'Proposed change(s) below — review and Apply.'
+                  : reads.length > 0
+                  ? ''
+                  : t('assistant.no_reply') ?? '(no reply)'),
+            };
+            return copy;
+          });
+          setToolReadsByMsg((s) => {
+            const idx = assistantIdx >= 0 ? assistantIdx : 0;
+            return { ...s, [idx]: reads };
+          });
+          setToolWritesByMsg((s) => {
+            const idx = assistantIdx >= 0 ? assistantIdx : 0;
+            return { ...s, [idx]: writes };
+          });
+        } catch (e) {
+          // Tool-calling failed — most likely an older Gemma build that
+          // doesn't support tool_calls, or a transport hiccup. Fall back to
+          // the legacy text path so the user still gets an answer.
+          console.warn('[AIChat] tool-calling failed, falling back to text', e);
+          const actionBlock = family
+            ? buildFamilyActionPrompt({ allowedSectors })
+            : '';
+          const fallbackSys: ChatMessage = {
+            role: 'system',
+            content: baseSys + actionBlock + wikiBlock + wikiInstruction,
+          };
+          const text = await chat(
+            [fallbackSys, ...modelConversation],
+            { temperature: 0.5, maxTokens: 1024 }
+          );
+          setMessages((m) => {
+            const copy = [...m];
+            copy[copy.length - 1] = { ...copy[copy.length - 1], content: text };
+            return copy;
+          });
+        }
       } else {
         // Plain chat — system prompt + (optional) Wikipedia context block
         const baseSys = systemPrompt
@@ -560,6 +757,8 @@ export default function AIChat({
             family={family}
             actionStatus={actionStatus}
             actionErrors={actionErrors}
+            toolReads={toolReadsByMsg[i] ?? []}
+            toolWrites={toolWritesByMsg[i] ?? []}
             onApply={async (key, action) => {
               if (!family) return;
               // Guard against double-clicks: if this action is already
@@ -586,6 +785,58 @@ export default function AIChat({
             }}
             onDiscard={(key) =>
               setActionStatus((s) => ({ ...s, [key]: 'discarded' }))
+            }
+            onApplyToolWrite={async (writeIdx) => {
+              const writes = toolWritesByMsg[i] ?? [];
+              const w = writes[writeIdx];
+              if (!w) return;
+              if (
+                w.status === 'applying' ||
+                w.status === 'applied' ||
+                w.status === 'discarded'
+              ) {
+                return;
+              }
+              const setOne = (patch: Partial<ToolWriteDisplay>) =>
+                setToolWritesByMsg((s) => {
+                  const arr = [...(s[i] ?? [])];
+                  arr[writeIdx] = { ...arr[writeIdx], ...patch };
+                  return { ...s, [i]: arr };
+                });
+              setOne({ status: 'applying', error: undefined });
+              try {
+                const outcome = await applyToolCall(w.call, {
+                  scopedFamilyId: family?.family_id,
+                });
+                if (outcome.kind === 'family') {
+                  setOne({
+                    status: 'applied',
+                    appliedNote:
+                      outcome.family.head_name + ' (' + outcome.family.family_id + ')',
+                  });
+                } else {
+                  const created = await commitDraftOrder(
+                    outcome.payload,
+                    user?.user_id ?? 'system'
+                  );
+                  const orderLabel =
+                    created.order_number > 0
+                      ? `ORD-${String(created.order_number).padStart(3, '0')}`
+                      : created.distribution_id;
+                  setOne({ status: 'applied', appliedNote: orderLabel });
+                }
+              } catch (e) {
+                const raw = e instanceof Error ? e.message : String(e);
+                setOne({ status: 'failed', error: raw });
+              }
+            }}
+            onDiscardToolWrite={(writeIdx) =>
+              setToolWritesByMsg((s) => {
+                const arr = [...(s[i] ?? [])];
+                if (!arr[writeIdx]) return s;
+                arr[writeIdx] = { ...arr[writeIdx], status: 'discarded' };
+                return { ...s, [i]: arr };
+              })
             }
             messageIdx={i}
           />
@@ -680,16 +931,24 @@ function Bubble({
   family,
   actionStatus,
   actionErrors,
+  toolReads,
+  toolWrites,
   onApply,
   onDiscard,
+  onApplyToolWrite,
+  onDiscardToolWrite,
   messageIdx,
 }: {
   m: ChatMessage;
   family?: Family;
-  actionStatus: Record<string, 'pending' | 'applying' | 'applied' | 'discarded' | 'failed'>;
+  actionStatus: Record<string, ActionStatus>;
   actionErrors: Record<string, string>;
+  toolReads: ToolReadDisplay[];
+  toolWrites: ToolWriteDisplay[];
   onApply: (key: string, action: FamilyAction) => Promise<void>;
   onDiscard: (key: string) => void;
+  onApplyToolWrite: (writeIdx: number) => Promise<void>;
+  onDiscardToolWrite: (writeIdx: number) => void;
   messageIdx: number;
 }) {
   const isUser = m.role === 'user';
@@ -714,6 +973,13 @@ function Bubble({
         {!isUser && (
           <div className="flex items-center gap-1.5 text-xs text-ai mb-1.5 font-medium">
             <Sparkles size={12} /> Gemma 4
+          </div>
+        )}
+        {!isUser && toolReads.length > 0 && (
+          <div className="mb-2 space-y-1">
+            {toolReads.map((r, idx) => (
+              <ToolReadChip key={idx} read={r} />
+            ))}
           </div>
         )}
         {isUser ? (
@@ -771,6 +1037,18 @@ function Bubble({
                 />
               );
             })}
+          </div>
+        )}
+        {!isUser && toolWrites.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-slate-700 space-y-2">
+            {toolWrites.map((w, idx) => (
+              <ToolWriteCard
+                key={idx}
+                write={w}
+                onApply={() => void onApplyToolWrite(idx)}
+                onDiscard={() => onDiscardToolWrite(idx)}
+              />
+            ))}
           </div>
         )}
         {m.citations && m.citations.length > 0 && (
@@ -872,6 +1150,126 @@ function ActionCard({
       <div className="flex gap-2">
         <button
           onClick={() => void onApply()}
+          className="touch-target px-3 py-1.5 bg-brand hover:bg-brand-dark text-white rounded-md text-xs font-semibold flex items-center gap-1"
+        >
+          <CheckCircle2 size={12} /> Apply
+        </button>
+        <button
+          onClick={onDiscard}
+          className="touch-target px-3 py-1.5 bg-surface-deep hover:bg-slate-700 text-slate-300 rounded-md text-xs flex items-center gap-1"
+        >
+          <XIcon size={12} /> Discard
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One-line chip showing a tool the model called automatically (read tool).
+ * Renders above the assistant's text reply so the user can see the
+ * grounding behind the answer. Hovering reveals full args.
+ */
+function ToolReadChip({ read }: { read: ToolReadDisplay }) {
+  return (
+    <div
+      className="text-[10px] inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-deep border border-slate-700 text-slate-300 font-mono"
+      title={`${read.name}(${read.argsSummary || ''})\n→ ${read.resultSummary}${
+        read.error ? `\n!! ${read.error}` : ''
+      }`}
+    >
+      <span className="text-ai">⚙</span>
+      <span className="font-semibold text-slate-200">{read.name}</span>
+      {read.argsSummary && (
+        <span className="text-slate-400 truncate max-w-[12rem]">
+          {read.argsSummary}
+        </span>
+      )}
+      <span className="text-slate-500">→</span>
+      <span className={read.error ? 'text-priority-critical' : 'text-slate-300'}>
+        {read.error ? read.error : read.resultSummary}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Apply/Discard card for a write tool call the model proposed. Same status
+ * lifecycle as ActionCard above but wrapped around an Ollama tool_call
+ * payload so we can support tools that don't map to a single FamilyAction
+ * (e.g. draft_dispatch_order).
+ */
+function ToolWriteCard({
+  write,
+  onApply,
+  onDiscard,
+}: {
+  write: ToolWriteDisplay;
+  onApply: () => void;
+  onDiscard: () => void;
+}) {
+  const { description, status, error, appliedNote } = write;
+
+  if (status === 'applying') {
+    return (
+      <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-brand/10 border border-brand/30 text-slate-200">
+        <Sparkles size={13} className="animate-spin" />
+        <span>Applying: {description}…</span>
+      </div>
+    );
+  }
+  if (status === 'applied') {
+    return (
+      <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-priority-normal/10 border border-priority-normal/30 text-priority-normal">
+        <CheckCircle2 size={13} />
+        <span>
+          Applied: {description}
+          {appliedNote ? ` — ${appliedNote}` : ''}
+        </span>
+      </div>
+    );
+  }
+  if (status === 'discarded') {
+    return (
+      <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-surface-deep border border-slate-700 text-slate-400">
+        <XIcon size={13} />
+        <span className="line-through">{description}</span>
+        <span className="ms-auto italic">discarded</span>
+      </div>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <div className="text-xs px-3 py-2 rounded-lg bg-priority-critical/10 border border-priority-critical/30 text-priority-critical flex items-start gap-2">
+        <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold">Could not apply</div>
+          <div className="opacity-80">{description}</div>
+          {error && <div className="opacity-70 italic mt-0.5">{error}</div>}
+        </div>
+        <button
+          onClick={onApply}
+          className="text-[11px] underline hover:no-underline ms-auto"
+        >
+          retry
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="text-xs px-3 py-2 rounded-lg bg-brand/10 border border-brand/30">
+      <div className="text-slate-200 font-medium mb-1.5 flex items-center gap-1.5">
+        <Sparkles size={12} className="text-ai" />
+        Proposed tool call
+        <span className="text-[10px] font-mono text-slate-400 bg-surface-deep px-1.5 py-0.5 rounded">
+          {write.call.function.name}
+        </span>
+      </div>
+      <div className="text-slate-100 mb-2">{description}</div>
+      <div className="flex gap-2">
+        <button
+          onClick={onApply}
           className="touch-target px-3 py-1.5 bg-brand hover:bg-brand-dark text-white rounded-md text-xs font-semibold flex items-center gap-1"
         >
           <CheckCircle2 size={12} /> Apply
