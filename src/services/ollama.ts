@@ -201,6 +201,94 @@ export async function* chatStream(
   }
 }
 
+// ---------- Multimodal chat (image + text) --------------------------------
+//
+// Gemma 4 is a vision-language model. Ollama's native /api/chat accepts an
+// `images: [<base64>, …]` array on a single message — the model receives
+// the image alongside the text prompt and produces text in response.
+//
+// We deliberately keep this as a SEPARATE entry point (rather than adding
+// an optional `images` param to chat()) so callers can't accidentally ship
+// a giant base64 payload through paths that expect short text-only
+// completions — the multimodal model is much slower and we want the call
+// site to be explicit.
+//
+// All caveats from chat() apply:
+//   * Browser must be able to reach Ollama (OLLAMA_ORIGINS=*).
+//   * The configured model must support vision. If it doesn't, the model
+//     silently ignores the image and treats the prompt as text-only — the
+//     caller is responsible for telling the user something useful when
+//     the response is obviously wrong (no extracted rows, etc.).
+
+interface ChatImageOpts extends ChatOpts {
+  /** Override the model just for this multimodal call. */
+  model?: string;
+  /** Ask Ollama to constrain output to valid JSON via `format: "json"`. */
+  jsonMode?: boolean;
+}
+
+export async function chatWithImage(
+  messages: ChatMessage[],
+  imagesBase64: string[],
+  opts: ChatImageOpts = {}
+): Promise<string> {
+  if (!imagesBase64.length) {
+    throw new Error('chatWithImage called with no images.');
+  }
+  const { baseUrl, model: defaultModel } = getConfig();
+  const model = opts.model ?? defaultModel;
+
+  // Per Ollama's contract, the `images` field hangs off the LAST user
+  // message. We clone the array (rather than mutate the caller's input)
+  // and attach the images to the final user turn — falling back to a
+  // synthesized turn if the caller somehow handed us only a system msg.
+  const conv = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  })) as Array<{ role: string; content: string; images?: string[] }>;
+  const lastUserIdx = (() => {
+    for (let i = conv.length - 1; i >= 0; i--) {
+      if (conv[i].role === 'user') return i;
+    }
+    return -1;
+  })();
+  if (lastUserIdx >= 0) {
+    conv[lastUserIdx].images = imagesBase64;
+  } else {
+    conv.push({ role: 'user', content: '', images: imagesBase64 });
+  }
+
+  const body: Record<string, unknown> = {
+    model,
+    messages: conv,
+    stream: false,
+    options: {
+      num_ctx: opts.numCtx ?? DEFAULT_NUM_CTX,
+      temperature: opts.temperature ?? 0.2,
+      num_predict: opts.maxTokens ?? 2048,
+    },
+  };
+  if (opts.jsonMode) body.format = 'json';
+
+  // Vision inference is slow on a CPU — push the timeout out to 5 min so
+  // a low-end field laptop has a chance to finish before we abort.
+  const res = await withTimeout(
+    (signal) =>
+      fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
+      }),
+    300_000
+  );
+  if (!res.ok) {
+    throw new Error(`Ollama vision chat failed: ${res.status} ${res.statusText}`);
+  }
+  const data = (await res.json()) as ChatResponse;
+  return data.message?.content ?? '';
+}
+
 // ---------- Embeddings (RAG) ----------------------------------------------
 
 export async function embed(text: string): Promise<number[]> {

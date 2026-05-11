@@ -14,6 +14,7 @@ import {
   Package,
   Edit2,
   UserPlus,
+  Camera,
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
@@ -25,6 +26,7 @@ import { Card } from '@/components/Card';
 import EmptyState from '@/components/EmptyState';
 import Loading from '@/components/Loading';
 import FamilyEditModal from '@/components/FamilyEditModal';
+import PaperFormImport from '@/components/PaperFormImport';
 import type { AidDistribution, Family, PrioritizationResult, PriorityLevel } from '@/types';
 
 type PriorityFilter = 'ALL' | PriorityLevel;
@@ -52,6 +54,9 @@ export default function Families() {
   const [modal, setModal] = useState<
     { mode: 'create' } | { mode: 'edit'; family: Family } | null
   >(null);
+  // Separate state for the paper-form (photo) import flow so it can coexist
+  // with the manual create/edit modal without one collapsing the other.
+  const [paperImportOpen, setPaperImportOpen] = useState(false);
 
   // Filter out soft-deleted families. Historic distributions can still
   // reference deleted_at families via family_id, but the active list
@@ -190,6 +195,17 @@ export default function Families() {
             <span>{t('families_edit.add_family')}</span>
           </button>
           <button
+            onClick={() => setPaperImportOpen(true)}
+            title={
+              t('paper_form.button_tip') ??
+              'Snap a photo of a paper registration form. Gemma 4 vision reads each row offline.'
+            }
+            className="touch-target px-4 py-2 bg-surface-light hover:bg-slate-600 rounded-lg flex items-center gap-2 text-sm font-semibold transition-colors text-slate-100"
+          >
+            <Camera size={16} className="text-ai" />
+            <span>{t('paper_form.button') ?? 'Import from photo'}</span>
+          </button>
+          <button
             onClick={() => void runAI()}
             disabled={running}
             className="touch-target px-4 py-2 bg-ai hover:bg-violet-600 disabled:opacity-60 rounded-lg flex items-center gap-2 text-sm font-semibold transition-colors"
@@ -309,6 +325,9 @@ export default function Families() {
           existing={modal.mode === 'edit' ? modal.family : undefined}
           onClose={() => setModal(null)}
         />
+      )}
+      {paperImportOpen && (
+        <PaperFormImport onClose={() => setPaperImportOpen(false)} />
       )}
     </div>
   );
