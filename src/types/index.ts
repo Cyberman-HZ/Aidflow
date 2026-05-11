@@ -58,6 +58,13 @@ export interface Family {
    * pattern as Worker.deleted_at — never hard-delete.
    */
   deleted_at?: string;
+  /**
+   * Free-text reason captured at delete time. Required by the
+   * DeleteFamilyModal so every soft-deleted row carries an auditable
+   * explanation ("relocated out of operational area", "duplicate of
+   * F-0123", "data entry error", etc.). Set alongside `deleted_at`.
+   */
+  deletion_reason?: string;
 }
 
 export type DistributionStatus =

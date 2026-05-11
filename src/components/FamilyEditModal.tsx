@@ -25,6 +25,7 @@ import {
   SkipForward,
   Sparkles,
   HelpCircle,
+  Camera,
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
@@ -36,6 +37,7 @@ import {
   type ColumnMapping,
   type CoercedRow,
 } from '@/services/spreadsheetImport';
+import PaperFormImport from '@/components/PaperFormImport';
 import type {
   Family,
   DisplacementStatus,
@@ -144,6 +146,11 @@ export default function FamilyEditModal({
   // Tooltip popover next to the Import button — explains the recommended
   // column headers so the admin knows how to format their spreadsheet.
   const [tipOpen, setTipOpen] = useState(false);
+  // Sibling import path: "Import from photo" opens the multimodal flow
+  // on top of this modal. Photo-imported rows commit as fresh families
+  // (separate from the form being filled here), so closing the photo
+  // modal returns the user to this form unchanged.
+  const [photoImportOpen, setPhotoImportOpen] = useState(false);
   useEffect(() => {
     if (!tipOpen) return;
     const close = () => setTipOpen(false);
@@ -398,13 +405,16 @@ export default function FamilyEditModal({
           </button>
         </header>
 
-        {/* Spreadsheet-import affordance — only on create (no point in
-            replacing fields when editing an existing family). Two states:
-            (1) the trigger row when no import is in flight, (2) the
-            wizard banner showing "row N of M" while walking through. */}
+        {/* Import affordances — only on create (no point in replacing fields
+            when editing an existing family). Two stacked rows: spreadsheet
+            ingest (Gemma 4 maps columns) and paper-form photo ingest
+            (Gemma 4 vision reads the rows). Both feed candidate families
+            into the registry; this form stays untouched until you save it.
+            The wizard banner takes over when the spreadsheet flow is active. */}
         {!isEditing && (
-          <div className="px-5 pt-3">
+          <div className="px-5 pt-3 space-y-2">
             {!inWizard ? (
+              <>
               <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-surface-light/50 border border-slate-700">
                 <div className="flex items-center gap-2 text-xs text-slate-300">
                   <FileSpreadsheet size={14} className="text-brand" />
@@ -592,6 +602,34 @@ export default function FamilyEditModal({
                   />
                 </div>
               </div>
+              {/* Sibling row — paper-form photo ingest. Mirrors the spreadsheet
+                  banner above but routes through Gemma 4 vision. */}
+              <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-surface-light/50 border border-slate-700">
+                <div className="flex items-center gap-2 text-xs text-slate-300">
+                  <Camera size={14} className="text-ai" />
+                  <span>
+                    {t(
+                      'paper_form.inline_hint',
+                      'Have a paper form? Snap a photo and Gemma 4 vision reads each row.'
+                    )}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPhotoImportOpen(true)}
+                  className="touch-target px-2.5 py-1.5 bg-ai/10 hover:bg-ai/20 text-ai border border-ai/30 rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                  title={
+                    t(
+                      'paper_form.button_tip',
+                      'Snap a photo of a paper registration form. Gemma 4 vision reads each row offline.'
+                    ) ?? undefined
+                  }
+                >
+                  <Camera size={12} />
+                  {t('paper_form.button', 'Import from photo')}
+                </button>
+              </div>
+              </>
             ) : (
               <div className="px-3 py-2 rounded-lg bg-brand/10 border border-brand/30 flex items-center justify-between gap-3 flex-wrap">
                 <div className="flex items-center gap-2 text-xs text-brand font-semibold flex-wrap">
@@ -967,9 +1005,17 @@ export default function FamilyEditModal({
   );
 
   // Inline mode: render the form body directly. Modal mode: wrap in a
-  // fixed-position overlay so it appears as a centered dialog.
+  // fixed-position overlay so it appears as a centered dialog. Either way,
+  // the photo-import modal can stack on top when triggered.
   if (inline) {
-    return formBody;
+    return (
+      <>
+        {formBody}
+        {photoImportOpen && (
+          <PaperFormImport onClose={() => setPhotoImportOpen(false)} />
+        )}
+      </>
+    );
   }
   return (
     <div
@@ -985,6 +1031,12 @@ export default function FamilyEditModal({
       >
         {formBody}
       </div>
+      {/* Photo-import flow stacks above this modal. Closing it returns
+          control to the form below — nothing about the form's draft
+          state is touched. */}
+      {photoImportOpen && (
+        <PaperFormImport onClose={() => setPhotoImportOpen(false)} />
+      )}
     </div>
   );
 }
