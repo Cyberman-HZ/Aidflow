@@ -1,4 +1,4 @@
-// PaperFormImport — the "snap a photo of your paper form, register the
+﻿// PaperFormImport — the "snap a photo of your paper form, register the
 // families" feature.
 //
 // This is the project's headline Gemma-4-multimodal moment: the admin
@@ -32,6 +32,8 @@ import {
   Aperture,
   FlipHorizontal2,
 } from 'lucide-react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '@/db/database';
 import {
   fileToResizedJpegBase64,
   approxBase64Kb,
@@ -43,7 +45,11 @@ import {
   type FamilyCandidate,
   type ConfidenceTag,
 } from '@/services/formIngest';
-import type { DisplacementStatus, IncomeLevel } from '@/types';
+import {
+  findDuplicateFamilySync,
+  type DuplicateMatch,
+} from '@/services/familyDuplicates';
+import type { DisplacementStatus, IncomeLevel, Family } from '@/types';
 
 // ---------------------------------------------------------------------------
 // State machine
@@ -71,6 +77,14 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [byId, setById] = useState<Record<string, CardStatus>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Live snapshot of the registry for the duplicate-detection pre-flight.
+  // Each candidate card runs findDuplicateFamilySync(this list, name,
+  // count) on every render — so if the admin Applies a card and another
+  // card in the same batch becomes a duplicate of the just-applied
+  // family, the badge appears in real time and Apply gets disabled.
+  const liveFamilies =
+    useLiveQuery<Family[]>(() => db.families.toArray(), []) ?? [];
 
   // ── ESC closes the modal ────────────────────────────────────────────
   useEffect(() => {
@@ -204,11 +218,10 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
                 id="paper-form-import-title"
                 className="text-lg font-semibold truncate"
               >
-                {t('paper_form.title') ?? 'Import families from a photo'}
+                {t('paper_form.title', 'Import families from a photo')}
               </h2>
               <p className="text-xs text-slate-400 truncate">
-                {t('paper_form.subtitle') ??
-                  'Snap a registration form. Gemma 4 vision reads each row offline. You review and Apply.'}
+                {t('paper_form.subtitle', 'Snap a registration form. Gemma 4 vision reads each row offline. You review and Apply.')}
               </p>
             </div>
           </div>
@@ -264,6 +277,7 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
               byId={byId}
               imageWarnings={imageWarnings}
               previewUrl={image?.dataUrl}
+              liveFamilies={liveFamilies}
               onPatch={patchCandidate}
               onApply={applyOne}
               onDiscard={discardOne}
@@ -281,36 +295,41 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
           <div className="border-t border-slate-700 px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
             <div className="text-xs text-slate-400 flex items-center gap-3 flex-wrap">
               <span>
-                {stats.applied} {t('paper_form.applied') ?? 'applied'}
+                {stats.applied} {t('paper_form.applied', 'applied')}
               </span>
               <span>
-                {stats.pending} {t('paper_form.pending') ?? 'pending'}
+                {stats.pending} {t('paper_form.pending', 'pending')}
               </span>
               {stats.discarded > 0 && (
                 <span>
-                  {stats.discarded} {t('paper_form.discarded') ?? 'discarded'}
+                  {stats.discarded} {t('paper_form.discarded', 'discarded')}
                 </span>
               )}
               {stats.failed > 0 && (
                 <span className="text-priority-critical">
-                  {stats.failed} {t('paper_form.failed') ?? 'failed'}
+                  {stats.failed} {t('paper_form.failed', 'failed')}
                 </span>
               )}
             </div>
             <div className="flex gap-2">
-              <button
-                onClick={() => void applyAll()}
-                disabled={stats.pending === 0 && stats.failed === 0}
-                className="touch-target px-3 py-1.5 bg-brand hover:bg-brand-dark disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-md flex items-center gap-1"
-              >
-                <CheckCircle2 size={13} />
-                {t('paper_form.apply_all') ?? 'Apply all remaining'}
-              </button>
+              {/* "Apply all remaining" only makes sense when there are
+                  2+ unhandled candidates. With one pending card it's a
+                  visual duplicate of the per-card Apply button below it,
+                  which is confusing — so we hide it in the 1-card case. */}
+              {stats.pending + stats.failed >= 2 && (
+                <button
+                  onClick={() => void applyAll()}
+                  className="touch-target px-3 py-1.5 bg-brand hover:bg-brand-dark text-white text-xs font-semibold rounded-md flex items-center gap-1"
+                >
+                  <CheckCircle2 size={13} />
+                  {t('paper_form.apply_all', 'Apply all remaining')}
+                </button>
+              )}
               <button
                 onClick={() => setStage('done')}
                 className="touch-target px-3 py-1.5 bg-surface-deep hover:bg-slate-700 text-slate-200 text-xs rounded-md"
               >
-                {t('paper_form.finish') ?? 'Finish'}
+                {t('paper_form.finish', 'Finish')}
               </button>
             </div>
           </div>
@@ -356,12 +375,10 @@ function PickStage({
       <div className="bg-surface-deep border border-slate-700 rounded-lg p-6 text-center">
         <ImageIcon size={36} className="mx-auto text-slate-500 mb-3" />
         <p className="text-sm text-slate-300 mb-1">
-          {t('paper_form.pick_prompt') ??
-            'Upload a clear photo of a paper registration form or family tally sheet.'}
+          {t('paper_form.pick_prompt', 'Upload a clear photo of a paper registration form or family tally sheet.')}
         </p>
         <p className="text-xs text-slate-500 mb-4">
-          {t('paper_form.pick_tip') ??
-            'JPG/PNG up to 25 MB. The image is processed locally — it never leaves this device.'}
+          {t('paper_form.pick_tip', 'JPG/PNG up to 25 MB. The image is processed locally — it never leaves this device.')}
         </p>
         <div className="flex justify-center gap-2 flex-wrap">
           <button
@@ -369,14 +386,14 @@ function PickStage({
             className="touch-target px-4 py-2 bg-brand hover:bg-brand-dark text-white text-sm font-semibold rounded-md flex items-center gap-2"
           >
             <Camera size={14} />
-            {t('paper_form.use_camera') ?? 'Use camera'}
+            {t('paper_form.use_camera', 'Use camera')}
           </button>
           <button
             onClick={onPickFile}
             className="touch-target px-4 py-2 bg-surface-light hover:bg-slate-600 text-slate-100 text-sm rounded-md flex items-center gap-2"
           >
             <Upload size={14} />
-            {t('paper_form.pick_file') ?? 'Pick a file'}
+            {t('paper_form.pick_file', 'Pick a file')}
           </button>
         </div>
         {error && (
@@ -641,7 +658,7 @@ function PreviewStage({
       <div className="bg-surface-deep border border-slate-700 rounded-lg overflow-hidden">
         <img
           src={image.dataUrl}
-          alt={t('paper_form.preview_alt') ?? 'Paper form preview'}
+          alt={t('paper_form.preview_alt', 'Paper form preview')}
           className="w-full max-h-[50vh] object-contain bg-black"
         />
         <div className="px-3 py-2 text-xs text-slate-400 border-t border-slate-700 flex flex-wrap items-center gap-3">
@@ -653,14 +670,14 @@ function PreviewStage({
             onClick={onChange}
             className="ml-auto underline hover:text-slate-200"
           >
-            {t('paper_form.change_photo') ?? 'change photo'}
+            {t('paper_form.change_photo', 'change photo')}
           </button>
         </div>
       </div>
       {ingestError && (
         <div className="text-xs text-priority-critical bg-priority-critical/10 border border-priority-critical/30 rounded-md px-3 py-2">
           <div className="font-semibold flex items-center gap-1">
-            <AlertTriangle size={13} /> {t('paper_form.ingest_failed') ?? 'Extraction failed'}
+            <AlertTriangle size={13} /> {t('paper_form.ingest_failed', 'Extraction failed')}
           </div>
           <div className="mt-1 opacity-90">{ingestError}</div>
         </div>
@@ -670,14 +687,14 @@ function PreviewStage({
           onClick={onChange}
           className="touch-target px-4 py-2 bg-surface-light hover:bg-slate-600 text-slate-200 text-sm rounded-md"
         >
-          {t('common.cancel') ?? 'Cancel'}
+          {t('common.cancel', 'Cancel')}
         </button>
         <button
           onClick={onAnalyze}
           className="touch-target px-4 py-2 bg-ai hover:bg-violet-600 text-white text-sm font-semibold rounded-md flex items-center gap-2"
         >
           <Sparkles size={14} />
-          {t('paper_form.analyze') ?? 'Extract families with Gemma 4'}
+          {t('paper_form.analyze', 'Extract families with Gemma 4')}
         </button>
       </div>
       <PrivacyFooter t={t} />
@@ -698,13 +715,11 @@ function AnalyzingStage({ previewUrl, t }: { previewUrl: string | undefined; t: 
       <div className="flex items-center justify-center gap-2 text-sm text-slate-300">
         <Sparkles size={16} className="text-ai animate-pulse" />
         <span>
-          {t('paper_form.analyzing') ??
-            'Gemma 4 is reading the form locally — this can take 30 s to a few minutes on a CPU.'}
+          {t('paper_form.analyzing', 'Gemma 4 is reading the form locally — this can take 30 s to a few minutes on a CPU.')}
         </span>
       </div>
       <p className="text-xs text-slate-500 max-w-md mx-auto">
-        {t('paper_form.analyzing_tip') ??
-          'Multimodal inference is much heavier than text. Don\'t close this dialog.'}
+        {t('paper_form.analyzing_tip', "Multimodal inference is much heavier than text. Don't close this dialog.")}
       </p>
     </div>
   );
@@ -715,6 +730,7 @@ function ReviewStage({
   byId,
   imageWarnings,
   previewUrl,
+  liveFamilies,
   onPatch,
   onApply,
   onDiscard,
@@ -724,6 +740,7 @@ function ReviewStage({
   byId: Record<string, CardStatus>;
   imageWarnings: string[];
   previewUrl: string | undefined;
+  liveFamilies: Family[];
   onPatch: (id: string, patch: Partial<FamilyCandidate>) => void;
   onApply: (c: FamilyCandidate) => Promise<void>;
   onDiscard: (c: FamilyCandidate) => void;
@@ -745,8 +762,7 @@ function ReviewStage({
           </ul>
         )}
         <p className="text-xs text-slate-500 max-w-md mx-auto">
-          {t('paper_form.no_rows_tip') ??
-            'Try a clearer, well-lit photo, or use the Add family button to enter the data manually.'}
+          {t('paper_form.no_rows_tip', 'Try a clearer, well-lit photo, or use the Add family button to enter the data manually.')}
         </p>
       </div>
     );
@@ -757,7 +773,7 @@ function ReviewStage({
         <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2">
           <div className="font-semibold flex items-center gap-1 mb-1">
             <AlertTriangle size={13} />
-            {t('paper_form.image_warnings') ?? 'Notes about the image'}
+            {t('paper_form.image_warnings', 'Notes about the image')}
           </div>
           <ul className="list-disc list-inside space-y-0.5 opacity-90">
             {imageWarnings.map((w, i) => (
@@ -782,17 +798,27 @@ function ReviewStage({
         </span>
       </div>
       <div className="space-y-3">
-        {candidates.map((c) => (
-          <CandidateCard
-            key={c.candidate_id}
-            c={c}
-            status={byId[c.candidate_id] ?? { status: 'pending' }}
-            onPatch={(patch) => onPatch(c.candidate_id, patch)}
-            onApply={() => void onApply(c)}
-            onDiscard={() => onDiscard(c)}
-            t={t}
-          />
-        ))}
+        {candidates.map((c) => {
+          // Compute the duplicate match on every render so live edits
+          // (name / member count) in the card re-evaluate immediately.
+          const duplicateOf = findDuplicateFamilySync(
+            liveFamilies,
+            c.head_name,
+            c.member_count
+          );
+          return (
+            <CandidateCard
+              key={c.candidate_id}
+              c={c}
+              status={byId[c.candidate_id] ?? { status: 'pending' }}
+              duplicateOf={duplicateOf}
+              onPatch={(patch) => onPatch(c.candidate_id, patch)}
+              onApply={() => void onApply(c)}
+              onDiscard={() => onDiscard(c)}
+              t={t}
+            />
+          );
+        })}
       </div>
     </div>
   );
@@ -823,7 +849,7 @@ function DoneStage({
         onClick={onClose}
         className="touch-target px-4 py-2 bg-brand hover:bg-brand-dark text-white text-sm font-semibold rounded-md"
       >
-        {t('common.close') ?? 'Close'}
+        {t('common.close', 'Close')}
       </button>
     </div>
   );
@@ -836,6 +862,7 @@ function DoneStage({
 function CandidateCard({
   c,
   status,
+  duplicateOf,
   onPatch,
   onApply,
   onDiscard,
@@ -843,6 +870,8 @@ function CandidateCard({
 }: {
   c: FamilyCandidate;
   status: CardStatus;
+  /** Non-null when this candidate would duplicate an existing family. */
+  duplicateOf: DuplicateMatch | null;
   onPatch: (patch: Partial<FamilyCandidate>) => void;
   onApply: () => void;
   onDiscard: () => void;
@@ -866,7 +895,7 @@ function CandidateCard({
       <div className="rounded-lg border border-slate-700 bg-surface-deep px-3 py-2 flex items-center gap-2 text-sm text-slate-400">
         <XIcon size={14} className="flex-shrink-0" />
         <span className="line-through">{c.head_name}</span>
-        <span className="ms-auto text-xs italic">{t('paper_form.discarded') ?? 'discarded'}</span>
+        <span className="ms-auto text-xs italic">{t('paper_form.discarded', 'discarded')}</span>
       </div>
     );
   }
@@ -885,7 +914,7 @@ function CandidateCard({
           <input
             value={c.head_name}
             onChange={(e) => onPatch({ head_name: e.target.value })}
-            placeholder={t('paper_form.field_head_name') ?? 'Head of household'}
+            placeholder={t('paper_form.field_head_name', 'Head of household')}
             className="w-full bg-surface border border-slate-700 rounded px-2 py-1.5 text-sm font-semibold focus:border-brand outline-none"
             disabled={status.status === 'applying'}
           />
@@ -894,16 +923,42 @@ function CandidateCard({
           className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase tracking-wide flex-shrink-0 ${
             confidenceColor[c.confidence]
           }`}
-          title={t('paper_form.confidence_tooltip') ?? "Gemma 4's self-rated confidence on this row"}
+          title={t('paper_form.confidence_tooltip', "Gemma 4's self-rated confidence on this row")}
         >
           {c.confidence}
         </span>
       </div>
 
+      {/* Duplicate banner — surfaces when the candidate (after edits)
+          collides with an existing family on head_name + member_count.
+          Apply is disabled while this is visible; editing the name or
+          the member count clears the badge in real time. */}
+      {duplicateOf && (
+        <div
+          className="flex items-start gap-2 text-xs px-3 py-2 rounded-md bg-priority-critical/10 border border-priority-critical/40 text-priority-critical"
+          role="alert"
+        >
+          <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold">
+              {t('paper_form.duplicate_title', 'Duplicate of an existing family')}
+            </div>
+            <div className="opacity-90 mt-0.5">
+              {t('paper_form.duplicate_body', {
+                name: duplicateOf.head_name,
+                id: duplicateOf.family_id,
+                members: duplicateOf.member_count,
+                defaultValue: `"${duplicateOf.head_name}" with ${duplicateOf.member_count} members is already in the registry (${duplicateOf.family_id}). Edit the existing family instead, or change the name / member count if this is a different household.`,
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Field grid — compact 3-column layout */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
         <NumberField
-          label={t('paper_form.field_member_count') ?? 'Members'}
+          label={t('paper_form.field_member_count', 'Members')}
           value={c.member_count}
           min={1}
           max={30}
@@ -911,7 +966,7 @@ function CandidateCard({
           disabled={status.status === 'applying'}
         />
         <NumberField
-          label={t('paper_form.field_children_under_5') ?? 'Children <5'}
+          label={t('paper_form.field_children_under_5', 'Children <5')}
           value={c.children_under_5}
           min={0}
           max={15}
@@ -919,7 +974,7 @@ function CandidateCard({
           disabled={status.status === 'applying'}
         />
         <NumberField
-          label={t('paper_form.field_elderly_count') ?? 'Elderly'}
+          label={t('paper_form.field_elderly_count', 'Elderly')}
           value={c.elderly_count}
           min={0}
           max={10}
@@ -927,29 +982,29 @@ function CandidateCard({
           disabled={status.status === 'applying'}
         />
         <EnumField
-          label={t('paper_form.field_displacement') ?? 'Displacement'}
+          label={t('paper_form.field_displacement', 'Displacement')}
           value={c.displacement_status}
           options={[
-            { value: 'resident', label: t('displacement.resident') ?? 'Resident' },
-            { value: 'recently_displaced', label: t('displacement.recently_displaced') ?? 'Recently displaced' },
-            { value: 'refugee', label: t('displacement.refugee') ?? 'Refugee' },
+            { value: 'resident', label: t('displacement.resident', 'Resident') },
+            { value: 'recently_displaced', label: t('displacement.recently_displaced', 'Recently displaced') },
+            { value: 'refugee', label: t('displacement.refugee', 'Refugee') },
           ]}
           onChange={(v) => onPatch({ displacement_status: v as DisplacementStatus })}
           disabled={status.status === 'applying'}
         />
         <EnumField
-          label={t('paper_form.field_income') ?? 'Income'}
+          label={t('paper_form.field_income', 'Income')}
           value={c.income_level}
           options={[
-            { value: 'none', label: t('income.none') ?? 'None' },
-            { value: 'minimal', label: t('income.minimal') ?? 'Minimal' },
-            { value: 'moderate', label: t('income.moderate') ?? 'Moderate' },
+            { value: 'none', label: t('income.none', 'None') },
+            { value: 'minimal', label: t('income.minimal', 'Minimal') },
+            { value: 'moderate', label: t('income.moderate', 'Moderate') },
           ]}
           onChange={(v) => onPatch({ income_level: v as IncomeLevel })}
           disabled={status.status === 'applying'}
         />
         <TextField
-          label={t('paper_form.field_sector') ?? 'Sector'}
+          label={t('paper_form.field_sector', 'Sector')}
           value={c.location_sector}
           onChange={(v) => onPatch({ location_sector: v })}
           disabled={status.status === 'applying'}
@@ -966,7 +1021,7 @@ function CandidateCard({
             disabled={status.status === 'applying'}
             className="accent-brand"
           />
-          {t('paper_form.field_pregnant') ?? 'Pregnant / nursing member'}
+          {t('paper_form.field_pregnant', 'Pregnant / nursing member')}
         </label>
         {c.warnings.length > 0 && (
           <div className="text-amber-400 flex items-center gap-1">
@@ -982,7 +1037,7 @@ function CandidateCard({
           {c.medical_conditions.length > 0 && (
             <div>
               <span className="text-slate-500 me-1">
-                {t('paper_form.field_medical') ?? 'Medical:'}
+                {t('paper_form.field_medical', 'Medical:')}
               </span>
               {c.medical_conditions.join(', ')}
             </div>
@@ -990,7 +1045,7 @@ function CandidateCard({
           {c.notes && (
             <div>
               <span className="text-slate-500 me-1">
-                {t('paper_form.field_notes') ?? 'Notes:'}
+                {t('paper_form.field_notes', 'Notes:')}
               </span>
               {c.notes}
             </div>
@@ -1007,8 +1062,8 @@ function CandidateCard({
             className="text-slate-500 hover:text-slate-300 underline"
           >
             {showRaw
-              ? t('paper_form.hide_raw') ?? 'hide raw text'
-              : t('paper_form.show_raw') ?? 'show raw text Gemma read'}
+              ? t('paper_form.hide_raw', 'hide raw text')
+              : t('paper_form.show_raw', 'show raw text Gemma read')}
           </button>
           {showRaw && (
             <pre className="mt-1 text-slate-400 whitespace-pre-wrap bg-surface px-2 py-1.5 rounded border border-slate-800">
@@ -1032,11 +1087,23 @@ function CandidateCard({
             className="touch-target px-3 py-1.5 bg-surface hover:bg-slate-700 text-slate-300 text-xs rounded-md flex items-center gap-1 disabled:opacity-40"
           >
             <XIcon size={12} />
-            {t('common.discard') ?? 'Discard'}
+            {t('common.discard', 'Discard')}
           </button>
           <button
             onClick={onApply}
-            disabled={status.status === 'applying' || !c.head_name.trim()}
+            disabled={
+              status.status === 'applying' ||
+              !c.head_name.trim() ||
+              duplicateOf !== null
+            }
+            title={
+              duplicateOf
+                ? t('paper_form.duplicate_tooltip', {
+                    id: duplicateOf.family_id,
+                    defaultValue: `Cannot apply — would duplicate ${duplicateOf.family_id}. Open that family to edit instead.`,
+                  })
+                : undefined
+            }
             className="touch-target px-3 py-1.5 bg-brand hover:bg-brand-dark disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-md flex items-center gap-1"
           >
             {status.status === 'applying' ? (
@@ -1047,8 +1114,8 @@ function CandidateCard({
               <CheckCircle2 size={12} />
             )}
             {status.status === 'failed'
-              ? t('common.retry') ?? 'Retry'
-              : t('common.apply') ?? 'Apply'}
+              ? t('common.retry', 'Retry')
+              : t('common.apply', 'Apply')}
           </button>
         </div>
       </div>
@@ -1155,8 +1222,7 @@ function EnumField({
 function PrivacyFooter({ t }: { t: T }) {
   return (
     <div className="text-[11px] text-slate-500 text-center px-2">
-      {t('paper_form.privacy') ??
-        'The image is processed on this device via Ollama. It is not uploaded anywhere.'}
+      {t('paper_form.privacy', 'The image is processed on this device via Ollama. It is not uploaded anywhere.')}
     </div>
   );
 }

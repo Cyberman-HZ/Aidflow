@@ -380,15 +380,15 @@ function FamilyRow({
     ? Math.floor((Date.now() - new Date(family.last_aid_at).getTime()) / 86_400_000)
     : null;
 
-  // Prefer AI-cached recommended items if present; otherwise rule-engine output.
-  const items =
-    // Treat the family record as the source of truth: an explicit empty
-    // array means "no current needs" (e.g. just cleared via mark-delivered)
-    // and must NOT be overwritten by the rule engine's default suggestions.
-    // Only fall back to the rule engine when the field was never set.
-    family.recommended_items !== undefined
-      ? family.recommended_items
-      : result?.recommended_items ?? [];
+  // The family row is the SINGLE source of truth for current needs.
+  // We deliberately do NOT fall back to the rule engine's suggestions:
+  // imported families (CSV / photo) have `recommended_items` undefined
+  // because the source never provided items, and we shouldn't render
+  // auto-invented needs that nobody entered. The Edit button on the
+  // CurrentNeedsCard (family detail page) is the only way real items
+  // land on a family. See the "Imports must not auto-invent needs"
+  // bug-fix series for rationale.
+  const items = family.recommended_items ?? [];
 
   return (
     // Card body is presentation-only — no whole-card click target. The

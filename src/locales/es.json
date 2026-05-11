@@ -529,7 +529,10 @@
     "next": "Siguiente",
     "done": "Listo",
     "deleting": "Eliminando…",
-    "ok": "OK"
+    "ok": "OK",
+    "apply": "Aplicar",
+    "discard": "Descartar",
+    "retry": "Reintentar"
   },
   "workers": {
     "title": "Personal",
@@ -578,6 +581,9 @@
     "button": "Importar desde foto",
     "button_tip": "Saca una foto de un formulario en papel. Gemma 4 lee cada fila sin conexión.",
     "inline_hint": "¿Tienes un formulario en papel? Saca una foto y Gemma 4 lee cada fila.",
+    "duplicate_title": "Duplicado de una familia existente",
+    "duplicate_body": "«{{name}}» con {{members}} miembros ya está en el registro ({{id}}). Edita la familia existente, o cambia el nombre / número de miembros si es un hogar diferente.",
+    "duplicate_tooltip": "No se puede aplicar — duplicaría {{id}}. Abre esa familia para editarla en su lugar.",
     "title": "Importar familias desde una foto",
     "subtitle": "Saca una foto de un formulario en papel. Gemma 4 lee cada fila localmente. Tú revisas y aplicas.",
     "pick_prompt": "Sube una foto nítida de un formulario de registro en papel o una hoja de conteo familiar.",
@@ -640,6 +646,7 @@
   "families_edit": {
     "add_family": "Añadir familia",
     "edit_family": "Editar {{name}}",
+    "duplicate_error": "Ya existe una familia «{{name}}» con {{members}} miembros ({{id}}). Abre esa familia para editarla en lugar de crear un duplicado.",
     "add_title": "Nueva familia",
     "edit_title": "Editar familia",
     "head_name": "Jefe de hogar",

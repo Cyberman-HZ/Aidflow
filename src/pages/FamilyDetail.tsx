@@ -73,12 +73,14 @@ export default function FamilyDetail() {
   const rule = computeRuleScore(family, history);
   const score = rule.priority_score;
   const level = rule.priority_level;
-  const recommended = family.recommended_items ?? rule.recommended_items;
-  // The "effective family" — what the user sees on screen. The chips are
-  // rendered from `recommended` (which may come from the rule engine if the
-  // DB field is undefined). The AI must see THIS exact list, otherwise it
-  // will tell the user "the item isn't in the needs" while the chip is
-  // sitting right there. We pass this synthetic snapshot to AIChat.
+  // The family row is the single source of truth for current needs.
+  // No rule-engine fallback: imports (CSV / photo) leave this field
+  // undefined when the source never provided items, and we must not
+  // invent needs the admin never entered. An undefined or empty list
+  // renders as the "no items yet" empty state on the card.
+  const recommended: NeededItem[] = family.recommended_items ?? [];
+  // Pass-through snapshot for AIChat so the model sees the same list
+  // the chips show. Empty here means truly empty.
   const familyForAI: Family = {
     ...family,
     recommended_items: recommended,
@@ -112,7 +114,7 @@ export default function FamilyDetail() {
         <EditableMedicalCard family={family} />
       </div>
 
-      <CurrentNeedsCard family={family} fallbackItems={recommended} />
+      <CurrentNeedsCard family={family} />
 
       <div className="grid lg:grid-cols-2 gap-5 lg:items-stretch">
         <Card title={t('family_detail.history')}>
@@ -173,10 +175,9 @@ export default function FamilyDetail() {
 ==========================================================
 🟢 CURRENT NEED ITEMS — THE EXACT LIST (matches the chips on screen):
 ${
-  // Use `recommended` (which falls back to the rule engine when the DB
-  // row has no items) so the system prompt stays in lockstep with what
-  // the user actually sees rendered. Otherwise the AI denies items that
-  // are visible on screen.
+  // Use `recommended` — the exact list stored on the family row. No
+  // rule-engine fallback here either, so the AI sees what's actually
+  // in the DB instead of auto-suggested items the admin never entered.
   recommended.length > 0
     ? recommended
         .map((it, i) => `  ${i + 1}. ${it.name} (quantity: ${it.quantity})`)
@@ -210,21 +211,19 @@ Be concise. Reference the family's specific situation. When the user asks for a 
 // family.recommended_items as { name, quantity } objects and surface as
 // "Suggested needs" in the distribute wizard's step 3 — editing them here
 // changes what the wizard suggests for this family next time.
+//
+// No rule-engine fallback here. If `recommended_items` is undefined or
+// empty, the card renders its empty state ("No items yet — click Edit to
+// add some.") instead of auto-inventing needs from demographics. This is
+// the rule that matches user expectation: items appear only when an
+// admin or a delivery worker actually entered them.
 function CurrentNeedsCard({
   family,
-  fallbackItems,
 }: {
   family: Family;
-  fallbackItems: NeededItem[];
 }) {
   const { t } = useTranslation();
-  // An explicit empty array means "no current needs" (e.g. the worker just
-  // cleared them on delivery) and must be honoured. Only fall back to the
-  // rule-engine suggestions when the family has never had items set.
-  const items: NeededItem[] =
-    family.recommended_items !== undefined
-      ? family.recommended_items
-      : fallbackItems;
+  const items: NeededItem[] = family.recommended_items ?? [];
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<NeededItem[]>(items);
   const [draftName, setDraftName] = useState('');
