@@ -13,8 +13,8 @@ import {
   X,
   Package,
   Edit2,
+  Trash2,
   UserPlus,
-  Camera,
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
@@ -26,7 +26,7 @@ import { Card } from '@/components/Card';
 import EmptyState from '@/components/EmptyState';
 import Loading from '@/components/Loading';
 import FamilyEditModal from '@/components/FamilyEditModal';
-import PaperFormImport from '@/components/PaperFormImport';
+import DeleteFamilyModal from '@/components/DeleteFamilyModal';
 import type { AidDistribution, Family, PrioritizationResult, PriorityLevel } from '@/types';
 
 type PriorityFilter = 'ALL' | PriorityLevel;
@@ -50,13 +50,20 @@ export default function Families() {
   const [sortKey, setSortKey] = useState<SortKey>('score_desc');
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<PrioritizationResult[]>([]);
-  // Modal state — null means closed; { mode: 'create' } or { mode: 'edit', family }
-  const [modal, setModal] = useState<
-    { mode: 'create' } | { mode: 'edit'; family: Family } | null
-  >(null);
-  // Separate state for the paper-form (photo) import flow so it can coexist
-  // with the manual create/edit modal without one collapsing the other.
-  const [paperImportOpen, setPaperImportOpen] = useState(false);
+  // "Add family" modal state. Editing is now done in-place on the family
+  // detail page (linked from the pencil icon on each row), so we no longer
+  // surface an edit modal here — the pencil takes the user straight into
+  // the family detail view where the demographic / medical / needs cards
+  // each have their own inline edit affordance.
+  const [createOpen, setCreateOpen] = useState(false);
+  // Soft-delete dialog state. The family being deleted is held here so
+  // the modal can show its name; the in-flight flag prevents double-
+  // submission while the IndexedDB write resolves; the error captures
+  // any storage failure so the modal can surface it inline (rather than
+  // crash the page).
+  const [deleteTarget, setDeleteTarget] = useState<Family | null>(null);
+  const [deletingNow, setDeletingNow] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Filter out soft-deleted families. Historic distributions can still
   // reference deleted_at families via family_id, but the active list
@@ -188,22 +195,11 @@ export default function Families() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={() => setModal({ mode: 'create' })}
+            onClick={() => setCreateOpen(true)}
             className="touch-target px-4 py-2 bg-brand hover:bg-brand-dark rounded-lg flex items-center gap-2 text-sm font-semibold transition-colors text-white"
           >
             <UserPlus size={16} />
             <span>{t('families_edit.add_family')}</span>
-          </button>
-          <button
-            onClick={() => setPaperImportOpen(true)}
-            title={
-              t('paper_form.button_tip') ??
-              'Snap a photo of a paper registration form. Gemma 4 vision reads each row offline.'
-            }
-            className="touch-target px-4 py-2 bg-surface-light hover:bg-slate-600 rounded-lg flex items-center gap-2 text-sm font-semibold transition-colors text-slate-100"
-          >
-            <Camera size={16} className="text-ai" />
-            <span>{t('paper_form.button') ?? 'Import from photo'}</span>
           </button>
           <button
             onClick={() => void runAI()}
@@ -313,21 +309,56 @@ export default function Families() {
                 key={f.family_id}
                 family={f}
                 result={r}
-                onEdit={() => setModal({ mode: 'edit', family: f })}
+                onDelete={() => {
+                  setDeleteError(null);
+                  setDeleteTarget(f);
+                }}
               />
             );
           })}
         </div>
       )}
 
-      {modal && (
-        <FamilyEditModal
-          existing={modal.mode === 'edit' ? modal.family : undefined}
-          onClose={() => setModal(null)}
-        />
+      {createOpen && (
+        <FamilyEditModal onClose={() => setCreateOpen(false)} />
       )}
-      {paperImportOpen && (
-        <PaperFormImport onClose={() => setPaperImportOpen(false)} />
+
+      {deleteTarget && (
+        <DeleteFamilyModal
+          family={deleteTarget}
+          deleting={deletingNow}
+          error={deleteError}
+          onCancel={() => {
+            if (deletingNow) return; // freeze cancel while a write is in flight
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }}
+          onConfirm={async (reason) => {
+            if (!deleteTarget) return;
+            setDeletingNow(true);
+            setDeleteError(null);
+            try {
+              // Soft-delete: tag the family with deleted_at + an
+              // auditable deletion_reason. Historic AidDistribution rows
+              // still reference family_id, so we never hard-delete —
+              // this matches the worker soft-delete pattern.
+              await db.families.update(deleteTarget.family_id, {
+                deleted_at: new Date().toISOString(),
+                deletion_reason: reason,
+                last_updated: new Date().toISOString(),
+              });
+              setDeleteTarget(null);
+            } catch (e) {
+              const raw = e instanceof Error ? e.message : String(e);
+              const prefix =
+                t('families_delete.failed') ??
+                'Could not delete the family. ';
+              setDeleteError(prefix + raw);
+            } finally {
+              setDeletingNow(false);
+            }
+          }}
+        />
       )}
     </div>
   );
@@ -336,11 +367,11 @@ export default function Families() {
 function FamilyRow({
   family,
   result,
-  onEdit,
+  onDelete,
 }: {
   family: Family;
   result?: PrioritizationResult;
-  onEdit: () => void;
+  onDelete: () => void;
 }) {
   const { t } = useTranslation();
   const score = result?.priority_score ?? 0;
@@ -360,12 +391,15 @@ function FamilyRow({
       : result?.recommended_items ?? [];
 
   return (
-    <div className="group relative bg-surface hover:bg-surface-light border border-slate-700 hover:border-brand/40 rounded-xl transition-colors">
-      <Link
-        to={`/families/${family.family_id}`}
-        className="block px-4 py-3 focus:outline-none"
-      >
-        <div className="min-w-0 pe-10">
+    // Card body is presentation-only — no whole-card click target. The
+    // pencil icon in the top-right is the single affordance for opening
+    // a family, and it links straight to the detail page where the
+    // demographics / medical / needs cards have their own inline edit
+    // buttons. Hover styles are scoped to the pencil so the rest of the
+    // card doesn't look falsely interactive.
+    <div className="group relative bg-surface border border-slate-700 rounded-xl">
+      <div className="block px-4 py-3">
+        <div className="min-w-0 pe-20">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold truncate">{family.head_name}</span>
             <span className="text-xs text-slate-500">{family.family_id}</span>
@@ -412,25 +446,39 @@ function FamilyRow({
               {items.length > 6 && (
                 <span className="text-[11px] text-slate-500">+{items.length - 6} more</span>
               )}
-              </div>
+            </div>
           )}
         </div>
-      </Link>
+      </div>
 
-      {/* Edit pencil — top-right ghost button, always visible. */}
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          e.preventDefault();
-          onEdit();
-        }}
-        aria-label={t('families_edit.edit_family', { name: family.head_name })}
-        title={t('families_edit.edit_title')}
-        className="absolute top-3 end-3 z-10 p-1.5 rounded-md text-slate-400 hover:text-brand hover:bg-brand/10 transition-colors"
-      >
-        <Edit2 size={16} />
-      </button>
+      {/* Top-right action cluster: edit (pencil → family detail) and
+          delete (trash → soft-delete confirmation modal). Stacked
+          horizontally with a small gap; both buttons share the same
+          ghost-style styling so neither dominates the card. The
+          card body itself is intentionally non-interactive (see
+          comment above) — these two buttons are the only affordances. */}
+      <div className="absolute top-3 end-3 z-10 flex items-center gap-1">
+        <Link
+          to={`/families/${family.family_id}`}
+          aria-label={t('families_edit.edit_family', { name: family.head_name })}
+          title={t('families_edit.edit_title')}
+          className="p-1.5 rounded-md text-slate-400 hover:text-brand hover:bg-brand/10 transition-colors"
+        >
+          <Edit2 size={16} />
+        </Link>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          aria-label={t('families_delete.button_label', { name: family.head_name }) ?? `Delete ${family.head_name}`}
+          title={t('families_delete.button_tooltip') ?? 'Delete this family'}
+          className="p-1.5 rounded-md text-slate-400 hover:text-priority-critical hover:bg-priority-critical/10 transition-colors"
+        >
+          <Trash2 size={16} />
+        </button>
+      </div>
     </div>
   );
 }

@@ -200,16 +200,6 @@ html.dark  { color-scheme: dark; }
   color: rgb(var(--slate-100));
 }
 
-/* Leaflet popup — themed via variables */
-.leaflet-popup-content-wrapper,
-.leaflet-popup-tip {
-  background: rgb(var(--surface)) !important;
-  color: rgb(var(--slate-200)) !important;
-}
-.leaflet-container a.leaflet-popup-close-button {
-  color: rgb(var(--slate-400)) !important;
-}
-
 /* Animation */
 @keyframes pulse-soft {
   0%, 100% { opacity: 1; }

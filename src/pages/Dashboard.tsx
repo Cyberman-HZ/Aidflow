@@ -17,6 +17,7 @@ import {
   BarChart3,
   RefreshCw,
   WifiOff,
+  Trash2,
 } from 'lucide-react';
 import {
   PieChart,
@@ -249,6 +250,27 @@ export default function Dashboard() {
     () => db.families.toArray().then((rows) => rows.filter((f) => !f.deleted_at)),
     []
   ) ?? [];
+
+  // Sibling query — the *deleted* families, sorted newest-first. Used by
+  // the "Recent family deletions" audit card lower on this page. We keep
+  // these in a separate query (rather than filtering the same array twice)
+  // so the main `families` array stays cheap to use everywhere it's
+  // already passed around without callers having to remember "oh, also
+  // exclude deleted_at."
+  const deletedFamilies =
+    useLiveQuery(
+      () =>
+        db.families
+          .toArray()
+          .then((rows) =>
+            rows
+              .filter((f) => !!f.deleted_at)
+              .sort((a, b) =>
+                (b.deleted_at ?? '').localeCompare(a.deleted_at ?? '')
+              )
+          ),
+      []
+    ) ?? [];
   const distributions = useLiveQuery(() => db.distributions.toArray(), []) ?? [];
   const workers = useLiveQuery(() => db.workers.toArray(), []) ?? [];
 
@@ -546,6 +568,19 @@ export default function Dashboard() {
       .sort((a, b) => (b.days_since_last_aid ?? 9999) - (a.days_since_last_aid ?? 9999))
       .slice(0, 5);
 
+    // Audit log — soft-deleted families with their captured reason and
+    // timestamp. Capped at 5 in the AI payload so the prompt stays
+    // compact; the full list still renders on the dashboard card.
+    const recentDeletions = deletedFamilies
+      .slice(0, 5)
+      .map((f) => ({
+        family_id: f.family_id,
+        head_name: f.head_name,
+        sector: f.location_sector,
+        deleted_at: f.deleted_at ?? null,
+        reason: f.deletion_reason ?? '(no reason recorded)',
+      }));
+
     return {
       generated_at: new Date().toISOString(),
       totals: {
@@ -562,6 +597,7 @@ export default function Dashboard() {
         stuck_24h: stuckOrders.length,
         sectors_active: sectorStats.size,
         workers_total: workers.length,
+        families_deleted_total: deletedFamilies.length,
       },
       sectors: Array.from(sectorStats.entries())
         .map(([sector, s]) => ({ sector, ...s }))
@@ -569,6 +605,7 @@ export default function Dashboard() {
       top_critical_families: topCritical,
       stuck_orders: stuckOrders,
       recent_failures_or_cancellations: recentIssues,
+      recent_family_deletions: recentDeletions,
       worker_workload: workerLoad,
       // AI-augmented signals
       items_velocity_7d: itemsVelocity,
@@ -653,6 +690,29 @@ export default function Dashboard() {
       );
     }
     if (lines.length === recBefore) lines.push('- Operations are steady; continue current cadence.');
+
+    // Registry hygiene — recent family deletions with their audit reason.
+    // Rendered as its own section so donors / auditors can see *why* a row
+    // disappeared from the active list without digging through IndexedDB.
+    if (payload.recent_family_deletions.length > 0) {
+      lines.push('');
+      lines.push('## Registry deletions');
+      for (const d of payload.recent_family_deletions) {
+        const when = d.deleted_at
+          ? new Date(d.deleted_at).toLocaleDateString()
+          : 'unknown date';
+        lines.push(
+          `- **${d.head_name}** (${d.family_id}, ${d.sector}) — deleted ${when}. Reason: ${d.reason}.`
+        );
+      }
+      if (payload.totals.families_deleted_total > payload.recent_family_deletions.length) {
+        lines.push(
+          `- +${
+            payload.totals.families_deleted_total - payload.recent_family_deletions.length
+          } more in the registry.`
+        );
+      }
+    }
     return lines.join('\n');
   };
 
@@ -695,19 +755,21 @@ export default function Dashboard() {
       `Families: ${t2.families} tracked, ${t2.critical_priority} CRITICAL, ${t2.new_needs_flagged} flagged with new urgent need.`,
       `Lifetime: ${t2.delivered_lifetime} delivered, ${t2.failed_lifetime} failed.`,
       `Sectors: ${t2.sectors_active}. Workers: ${t2.workers_total}.`,
+      `Registry hygiene: ${t2.families_deleted_total} families soft-deleted (latest ${payload.recent_family_deletions.length} listed below).`,
     ].join(' ');
 
     const systemPrompt =
       `You are AidFlow Pro's reporting AI. Respond in ${langName}. ` +
-      `Write a director-style executive brief in markdown with EXACTLY these four sections, in this order: ` +
-      `## Impact, ## Gaps & risks, ## Top critical cases, ## Recommended actions. ` +
-      `Each section MUST be filled out — never leave a section empty or with a single bullet. Aim for 4-6 substantive bullet points per section. ` +
+      `Write a director-style executive brief in markdown with EXACTLY these sections, in this order: ` +
+      `## Impact, ## Gaps & risks, ## Top critical cases, ## Recommended actions, ## Registry deletions. ` +
+      `Each section MUST be filled out — never leave a section empty or with a single bullet. Aim for 4-6 substantive bullet points per section, EXCEPT ## Registry deletions which has one bullet per deleted family. ` +
       `Cite real family names, family_ids, sectors, order numbers, worker names, and item names from the JSON below. ` +
       `## Impact — cover deliveries today, items distributed, lifetime delivered count, sectors active, and any new-needs flags. ` +
       `## Gaps & risks — cover stuck_orders >24h, repeat_delivery_alerts_7d (same family + same item 3+ times in a week — flag for review), unserved_too_long_critical (critical families with no aid in 14+ days), recent failed/cancelled orders, and worker-load imbalance. ` +
       `## Top critical cases — list the top 3-5 critical families with name, family_id, sector, score, and last-aid recency, plus their reason. ` +
       `## Recommended actions — give 4-6 concrete next steps. Name the highest-paced item from items_velocity_7d with its qty/day so procurement can react. Reference specific stuck orders or unserved families by id when proposing follow-up. ` +
-      `Never invent data; if a signal is genuinely empty, briefly note "none" rather than skipping the section. Aim for 400-600 words total. Plain markdown only — no tables, no code fences, no preamble. ` +
+      `## Registry deletions — one bullet per entry in recent_family_deletions. EACH BULLET MUST INCLUDE: the head_name, the family_id, the sector, the deletion date (from deleted_at), and the verbatim reason. Format: **{head_name}** ({family_id}, {sector}) — deleted {date}. Reason: "{reason}". If recent_family_deletions is empty, write exactly: "- No families have been deleted from the registry." ` +
+      `Never invent data; if a signal is genuinely empty, briefly note "none" rather than skipping the section. Aim for 500-700 words total. Plain markdown only — no tables, no code fences, no preamble. ` +
       `Start your response directly with "## Impact".`;
 
     const userPrompt =
@@ -1005,6 +1067,77 @@ export default function Dashboard() {
           </ul>
         )}
       </Card>
+
+      {/* Recent family deletions — audit log. Every soft-deleted family
+          (db.families row with deleted_at set) shows up here with the
+          admin-captured reason. The list pulls from a sibling live query
+          so it updates in real time when an admin clicks Delete in the
+          Families tab. We only render the section when at least one
+          deletion exists — no empty-state clutter on a fresh install. */}
+      {deletedFamilies.length > 0 && (
+        <Card
+          title={
+            <div className="flex items-center gap-2">
+              <Trash2 size={16} className="text-priority-critical" />
+              {t('dashboard.recent_deletions') ?? 'Recent family deletions'}
+              <span className="text-xs text-slate-500 font-normal">
+                ({deletedFamilies.length})
+              </span>
+            </div>
+          }
+        >
+          <ul className="divide-y divide-slate-700">
+            {deletedFamilies.slice(0, 10).map((f) => {
+              const deletedDate = f.deleted_at
+                ? new Date(f.deleted_at)
+                : null;
+              return (
+                <li key={f.family_id} className="py-3 flex items-start gap-3">
+                  <Trash2
+                    size={14}
+                    className="text-priority-critical flex-shrink-0 mt-0.5"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">
+                      {f.head_name}{' '}
+                      <span className="text-slate-500">— {f.family_id}</span>
+                    </div>
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      <span className="text-slate-500 me-1">
+                        {t('dashboard.deletion_reason') ?? 'Reason:'}
+                      </span>
+                      {f.deletion_reason || (
+                        <span className="italic text-slate-600">
+                          {t('dashboard.deletion_reason_missing') ??
+                            '(no reason recorded)'}
+                        </span>
+                      )}
+                    </div>
+                    {deletedDate && (
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        {t('dashboard.deleted_at') ?? 'Deleted'}{' '}
+                        {deletedDate.toLocaleDateString()}
+                        {' · '}
+                        {deletedDate.toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {deletedFamilies.length > 10 && (
+            <p className="text-[11px] text-slate-500 mt-2 italic">
+              {t('dashboard.deletions_more', {
+                count: deletedFamilies.length - 10,
+              }) ?? `+${deletedFamilies.length - 10} more in the registry.`}
+            </p>
+          )}
+        </Card>
+      )}
 
     </div>
   );

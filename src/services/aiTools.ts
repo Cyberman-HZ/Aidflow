@@ -776,10 +776,6 @@ export function getToolDefinitions(opts: { scopedFamilyId?: string } = {}): Tool
   return defs;
 }
 
-export function getTool(name: string): ToolEntry | undefined {
-  return TOOLS[name];
-}
-
 export function isWriteTool(name: string): boolean {
   return TOOLS[name]?.mode === 'write';
 }

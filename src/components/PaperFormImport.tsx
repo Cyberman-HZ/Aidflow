@@ -29,6 +29,8 @@ import {
   Edit2,
   Image as ImageIcon,
   RefreshCw,
+  Aperture,
+  FlipHorizontal2,
 } from 'lucide-react';
 import {
   fileToResizedJpegBase64,
@@ -47,7 +49,7 @@ import type { DisplacementStatus, IncomeLevel } from '@/types';
 // State machine
 // ---------------------------------------------------------------------------
 
-type Stage = 'pick' | 'preview' | 'analyzing' | 'review' | 'done';
+type Stage = 'pick' | 'camera' | 'preview' | 'analyzing' | 'review' | 'done';
 
 interface CardStatus {
   status: 'pending' | 'applying' | 'applied' | 'discarded' | 'failed';
@@ -69,7 +71,6 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [byId, setById] = useState<Record<string, CardStatus>>({});
   const fileRef = useRef<HTMLInputElement>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
 
   // ── ESC closes the modal ────────────────────────────────────────────
   useEffect(() => {
@@ -184,6 +185,14 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
       role="dialog"
       aria-modal="true"
       aria-labelledby="paper-form-import-title"
+      // CRITICAL: stop click/change events from bubbling to whatever modal
+      // we're rendered inside (FamilyEditModal's backdrop has
+      // onClick={onClose}). Without this, clicking "Pick a file" inside
+      // this dialog closes the parent FamilyEditModal first, unmounting
+      // us — the native file picker still opens, but its onChange fires
+      // on a dead component and nothing happens.
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => e.stopPropagation()}
     >
       <div className="bg-surface border border-slate-700 rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
         {/* ── Header ────────────────────────────────────────────────── */}
@@ -218,8 +227,16 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
           {stage === 'pick' && (
             <PickStage
               onPickFile={() => fileRef.current?.click()}
-              onPickCamera={() => cameraRef.current?.click()}
+              onPickCamera={() => setStage('camera')}
               error={pickError}
+              t={t}
+            />
+          )}
+
+          {stage === 'camera' && (
+            <CameraStage
+              onSnap={(file) => void onPick(file)}
+              onCancel={() => setStage('pick')}
               t={t}
             />
           )}
@@ -300,19 +317,13 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
         )}
       </div>
 
-      {/* Hidden file inputs (declared once, triggered from both stages) */}
+      {/* Hidden file input — triggered by "Pick a file". The camera path
+          uses getUserMedia (see CameraStage) so the user gets a live
+          webcam preview on desktop instead of a file picker. */}
       <input
         ref={fileRef}
         type="file"
         accept="image/*"
-        hidden
-        onChange={(e) => void onPick(e.target.files?.[0])}
-      />
-      <input
-        ref={cameraRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
         hidden
         onChange={(e) => void onPick(e.target.files?.[0])}
       />
@@ -324,7 +335,10 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
 // Stage panels
 // ===========================================================================
 
-type T = (k: string, opts?: Record<string, unknown>) => string;
+// Use react-i18next's real TFunction type rather than rolling our own —
+// `t()` has several overloads (default-value, options, plural counts) and
+// hand-modelling them keeps drifting out of sync with the library.
+type T = ReturnType<typeof useTranslation>['t'];
 
 function PickStage({
   onPickFile,
@@ -372,6 +386,239 @@ function PickStage({
         )}
       </div>
       <PrivacyFooter t={t} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CameraStage — live webcam preview via getUserMedia + snap-to-file
+// ---------------------------------------------------------------------------
+//
+// Why this exists: the original `<input type="file" capture="environment">`
+// path works on mobile (it pops the native camera app) but is silently
+// ignored on desktop browsers — they fall back to the file picker. For a
+// real "press the button, see your webcam" experience on a laptop we have
+// to drive MediaDevices.getUserMedia() directly.
+//
+// Lifecycle:
+//   1. Mount → request a stream with the rear camera (`facingMode:
+//      'environment'`). On a laptop with one webcam, the browser just
+//      hands us that camera. On a phone, we get the rear camera (better
+//      for photographing a paper form). User can flip if they want.
+//   2. Attach the stream to <video>; play it.
+//   3. On "Snap" → draw the current video frame into a canvas, convert
+//      the canvas to a JPEG blob, wrap as a File, hand to onSnap.
+//   4. On unmount or cancel → stop every track in the stream so the
+//      camera light goes off immediately.
+//
+// Error cases handled:
+//   - getUserMedia not available (insecure context, ancient browser) →
+//     show a clear message + Cancel button so the user falls back to
+//     "Pick a file".
+//   - User denies permission → same path.
+//   - No camera device → same path.
+function CameraStage({
+  onSnap,
+  onCancel,
+  t,
+}: {
+  onSnap: (file: File) => void;
+  onCancel: () => void;
+  t: T;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [facing, setFacing] = useState<'user' | 'environment'>('environment');
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [snapping, setSnapping] = useState(false);
+
+  // Acquire the stream whenever the facing mode changes. The cleanup
+  // closure tears down the previous stream so we don't leak the camera
+  // when the user clicks Flip mid-session.
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setError(
+        t(
+          'paper_form.camera_unsupported',
+          'This browser does not support webcam capture. Use Pick a file instead.'
+        )
+      );
+      return;
+    }
+    let cancelled = false;
+    setReady(false);
+    setError(null);
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: facing },
+            // Ask for a high-res frame so handwriting is legible. The
+            // browser will clamp to what the device actually supports.
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((tr) => tr.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          // playsInline is critical on iOS Safari — without it the video
+          // tries to go fullscreen and our modal layout breaks.
+          videoRef.current.playsInline = true;
+          await videoRef.current.play().catch(() => {});
+        }
+        setReady(true);
+      } catch (e) {
+        const raw = e instanceof Error ? e.message : String(e);
+        // Translate common DOMException names into friendly text.
+        const name = (e as { name?: string })?.name ?? '';
+        let friendly = raw;
+        if (name === 'NotAllowedError' || /denied|permission/i.test(raw)) {
+          friendly = t(
+            'paper_form.camera_denied',
+            'Camera access was denied. Allow it in the browser permissions, or use Pick a file.'
+          );
+        } else if (name === 'NotFoundError' || /not found|no camera/i.test(raw)) {
+          friendly = t(
+            'paper_form.camera_none',
+            'No camera was found on this device. Use Pick a file.'
+          );
+        } else if (name === 'NotReadableError') {
+          friendly = t(
+            'paper_form.camera_busy',
+            'The camera is in use by another app. Close it and try again.'
+          );
+        }
+        if (!cancelled) setError(friendly);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((tr) => tr.stop());
+        streamRef.current = null;
+      }
+    };
+  }, [facing, t]);
+
+  const snap = () => {
+    if (snapping || !ready) return;
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) return;
+    setSnapping(true);
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      setSnapping(false);
+      return;
+    }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          setSnapping(false);
+          return;
+        }
+        const file = new File([blob], `webcam-${Date.now()}.jpg`, {
+          type: 'image/jpeg',
+          lastModified: Date.now(),
+        });
+        // Hand off — the parent will run fileToResizedJpegBase64 +
+        // transition to the preview stage. We don't reset `snapping`
+        // because the stage is about to unmount anyway.
+        onSnap(file);
+      },
+      'image/jpeg',
+      0.92
+    );
+  };
+
+  if (error) {
+    return (
+      <div className="space-y-4">
+        <div className="text-sm text-priority-critical bg-priority-critical/10 border border-priority-critical/30 rounded-md px-3 py-3 flex items-start gap-2">
+          <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold">
+              {t('paper_form.camera_error_title', 'Camera unavailable')}
+            </div>
+            <div className="opacity-90 mt-0.5">{error}</div>
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <button
+            onClick={onCancel}
+            className="touch-target px-4 py-2 bg-surface-light hover:bg-slate-600 text-slate-100 text-sm rounded-md"
+          >
+            {t('common.cancel', 'Cancel')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-black rounded-lg overflow-hidden relative">
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full max-h-[55vh] object-contain"
+        />
+        {!ready && (
+          <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm bg-black/60">
+            <Sparkles size={16} className="text-ai animate-pulse me-2" />
+            {t('paper_form.camera_starting', 'Waiting for the camera…')}
+          </div>
+        )}
+      </div>
+      <p className="text-xs text-slate-500 text-center">
+        {t(
+          'paper_form.camera_tip',
+          'Hold the form steady and well-lit. Fill the frame — handwriting needs detail.'
+        )}
+      </p>
+      <div className="flex flex-wrap justify-end gap-2">
+        <button
+          onClick={() => setFacing((f) => (f === 'environment' ? 'user' : 'environment'))}
+          disabled={!ready}
+          title={t('paper_form.flip_camera', 'Flip camera')}
+          className="touch-target px-3 py-2 bg-surface-light hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 text-sm rounded-md flex items-center gap-1.5"
+        >
+          <FlipHorizontal2 size={14} />
+          <span className="hidden sm:inline">
+            {t('paper_form.flip_camera', 'Flip camera')}
+          </span>
+        </button>
+        <button
+          onClick={onCancel}
+          className="touch-target px-4 py-2 bg-surface-light hover:bg-slate-600 text-slate-200 text-sm rounded-md"
+        >
+          {t('common.cancel', 'Cancel')}
+        </button>
+        <button
+          onClick={snap}
+          disabled={!ready || snapping}
+          className="touch-target px-4 py-2 bg-brand hover:bg-brand-dark disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-md flex items-center gap-2"
+        >
+          {snapping ? (
+            <RefreshCw size={14} className="animate-spin" />
+          ) : (
+            <Aperture size={14} />
+          )}
+          {t('paper_form.snap', 'Snap')}
+        </button>
+      </div>
     </div>
   );
 }

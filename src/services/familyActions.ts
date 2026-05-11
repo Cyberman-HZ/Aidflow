@@ -181,14 +181,6 @@ Replace the entire list:
 `;
 }
 
-/**
- * @deprecated Use buildFamilyActionPrompt() so allowed values can be enumerated.
- * Kept as a fallback that tells the AI sectors are unknown.
- */
-export const FAMILY_ACTION_SYSTEM_PROMPT = buildFamilyActionPrompt({
-  allowedSectors: [],
-});
-
 // ---------------------------------------------------------------------------
 // Parsing & stripping
 // ---------------------------------------------------------------------------
@@ -228,10 +220,6 @@ export interface ParseResult {
    * change but it was malformed (vs. silently dropping it).
    */
   failedCandidates: number;
-}
-
-export function parseFamilyActions(text: string): FamilyAction[] {
-  return parseFamilyActionsDetailed(text).actions;
 }
 
 export function parseFamilyActionsDetailed(text: string): ParseResult {
