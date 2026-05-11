@@ -529,7 +529,10 @@
     "next": "Suivant",
     "done": "Terminé",
     "deleting": "Suppression…",
-    "ok": "OK"
+    "ok": "OK",
+    "apply": "Appliquer",
+    "discard": "Ignorer",
+    "retry": "Réessayer"
   },
   "workers": {
     "title": "Travailleurs",
@@ -578,6 +581,9 @@
     "button": "Importer depuis une photo",
     "button_tip": "Photographiez un formulaire papier. Gemma 4 lit chaque ligne hors ligne.",
     "inline_hint": "Vous avez un formulaire papier ? Prenez une photo et Gemma 4 lit chaque ligne.",
+    "duplicate_title": "Doublon d'une famille existante",
+    "duplicate_body": "« {{name}} » avec {{members}} membres est déjà dans le registre ({{id}}). Modifiez la famille existante, ou changez le nom / le nombre de membres s'il s'agit d'un foyer différent.",
+    "duplicate_tooltip": "Impossible d'appliquer — doublerait {{id}}. Ouvrez cette famille pour la modifier.",
     "title": "Importer des familles depuis une photo",
     "subtitle": "Photographiez un formulaire papier. Gemma 4 lit chaque ligne hors ligne. Vous validez et appliquez.",
     "pick_prompt": "Téléversez une photo nette d'un formulaire d'enregistrement ou d'une fiche papier.",
@@ -640,6 +646,7 @@
   "families_edit": {
     "add_family": "Ajouter une famille",
     "edit_family": "Modifier {{name}}",
+    "duplicate_error": "Une famille « {{name}} » avec {{members}} membres existe déjà ({{id}}). Ouvrez cette famille pour la modifier au lieu de créer un doublon.",
     "add_title": "Nouvelle famille",
     "edit_title": "Modifier la famille",
     "head_name": "Chef de famille",

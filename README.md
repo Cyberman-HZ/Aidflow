@@ -159,7 +159,6 @@ The output in `dist/` is a static PWA — no server required to host it.
 ```
 .
 ├── README.md                 ← this file
-├── CLAUDE.md                 ← architecture briefing for new contributors
 ├── LICENSE                   ← MIT (app code)
 ├── index.html                ← Vite entry document
 ├── package.json              ← npm metadata + scripts
@@ -185,13 +184,9 @@ The output in `dist/` is a static PWA — no server required to host it.
 │   └── qa/
 │       ├── test-tool-calls.mjs                ← live test: Gemma 4 native function calling
 │       ├── test-paper-form-ingest.mjs         ← live test: Gemma 4 vision (multimodal)
-│       ├── test-knowledge-base.mjs            ← RAG ingest + retrieval
-│       ├── test-spreadsheet-import.mjs        ← CSV / XLSX column mapping
-│       ├── test-distribute.mjs                ← dispatch wizard + atomic order number
-│       ├── test-family-profile.mjs            ← family detail rendering
-│       ├── test-family-profile-fixes.mjs      ← regression coverage for profile bugs
-│       ├── test-families-fixes.mjs            ← regression coverage for list bugs
-│       └── test-emotional-support.mjs         ← kids-content generation flow
+│       ├── test-family-delete.mjs             ← soft-delete + audit log invariants
+│       ├── test-import-no-autoseed.mjs        ← imports never auto-invent need items
+│       └── test-duplicate-prevention.mjs      ← no-duplicate-family invariant across all 3 paths
 │
 └── src/
     ├── main.tsx              ← React entry; mounts <App />
@@ -248,6 +243,7 @@ The output in `dist/` is a static PWA — no server required to host it.
     │   ├── formIngest.ts               ← paper-form vision pipeline: prompt + schema validation + commit
     │   ├── imageUtils.ts               ← file → resized JPEG → base64 (Ollama-compatible)
     │   ├── familyActions.ts            ← legacy fenced-action protocol (kept as fallback for non-tool-calling models)
+    │   ├── familyDuplicates.ts         ← duplicate-family detection (head_name + member_count) shared across all 3 creation paths
     │   ├── familyIntent.ts             ← regex intent detection (deterministic short-circuit for common phrases)
     │   ├── aiContext.ts                ← builds the global system prompt for the Assistant page
     │   ├── priorityRules.ts            ← deterministic rubric (Ollama-offline fallback)

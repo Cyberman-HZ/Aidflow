@@ -529,7 +529,10 @@
     "next": "Next",
     "done": "Done",
     "deleting": "Deleting…",
-    "ok": "OK"
+    "ok": "OK",
+    "apply": "Apply",
+    "discard": "Discard",
+    "retry": "Retry"
   },
   "workers": {
     "title": "Workers",
@@ -578,6 +581,9 @@
     "button": "Import from photo",
     "button_tip": "Snap a photo of a paper registration form. Gemma 4 vision reads each row offline.",
     "inline_hint": "Have a paper form? Snap a photo and Gemma 4 vision reads each row.",
+    "duplicate_title": "Duplicate of an existing family",
+    "duplicate_body": "\"{{name}}\" with {{members}} members is already in the registry ({{id}}). Edit the existing family instead, or change the name / member count if this is a different household.",
+    "duplicate_tooltip": "Cannot apply — would duplicate {{id}}. Open that family to edit instead.",
     "title": "Import families from a photo",
     "subtitle": "Snap a paper form. Gemma 4 reads each row offline. You review and Apply.",
     "pick_prompt": "Upload a clear photo of a paper registration form or family tally sheet.",
@@ -640,6 +646,7 @@
   "families_edit": {
     "add_family": "Add family",
     "edit_family": "Edit {{name}}",
+    "duplicate_error": "A family \"{{name}}\" with {{members}} members already exists ({{id}}). Open that family to edit instead of creating a duplicate.",
     "add_title": "Add new family",
     "edit_title": "Edit family",
     "head_name": "Head of household",

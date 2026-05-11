@@ -25,6 +25,7 @@
 import { db } from '@/db/database';
 import { chatWithImage, pingOllama } from './ollama';
 import { computeRuleScore } from './priorityRules';
+import { findDuplicateFamily } from './familyDuplicates';
 import type {
   ChatMessage,
   DisplacementStatus,
@@ -321,9 +322,58 @@ function newFamilyId(): string {
  *
  * Returns the persisted Family row.
  */
+/**
+ * Thrown by commitFamilyCandidate when the candidate would create a
+ * duplicate of an existing family (same head name + same member count).
+ * The PaperFormImport modal catches this and surfaces it as a per-row
+ * failure with the existing family_id so the admin knows where to go.
+ *
+ * Exposed as an Error subclass (rather than a plain Error) so callers
+ * can `instanceof`-check it if they want to handle duplicates
+ * differently from other persistence failures.
+ */
+export class DuplicateFamilyError extends Error {
+  readonly existing_family_id: string;
+  readonly existing_head_name: string;
+  readonly existing_member_count: number;
+  constructor(
+    message: string,
+    match: {
+      family_id: string;
+      head_name: string;
+      member_count: number;
+    }
+  ) {
+    super(message);
+    this.name = 'DuplicateFamilyError';
+    this.existing_family_id = match.family_id;
+    this.existing_head_name = match.head_name;
+    this.existing_member_count = match.member_count;
+  }
+}
+
 export async function commitFamilyCandidate(
   candidate: FamilyCandidate
 ): Promise<Family> {
+  // Duplicate guard — block the commit if the registry already has a
+  // family with the same head name + member count. This is the last
+  // line of defence: PaperFormImport also runs a pre-flight check
+  // before showing the Apply button, but DB state may have changed
+  // since the modal opened (e.g. the admin Applied a previous card
+  // in the same review session that ALSO matched). Throwing here is
+  // safe — the caller's onApply handler catches and shows the
+  // "Could not apply" state on the candidate card with this message.
+  const dup = await findDuplicateFamily(
+    candidate.head_name,
+    candidate.member_count
+  );
+  if (dup) {
+    throw new DuplicateFamilyError(
+      `A family named "${dup.head_name}" with ${dup.member_count} members already exists (${dup.family_id}). Open that family to edit it instead.`,
+      dup
+    );
+  }
+
   const now = new Date().toISOString();
   const family: Family = {
     family_id: newFamilyId(),
@@ -343,11 +393,23 @@ export async function commitFamilyCandidate(
       : `[Imported from paper form via Gemma 4 vision on ${now.slice(0, 10)}]`,
   };
 
+  // Compute the priority score / level / reason from demographics so the
+  // new family lands on the list at the right urgency immediately.
+  //
+  // DELIBERATELY skipped: scored.recommended_items. The rule engine can
+  // *suggest* items from demographics (e.g. children<5 → infant formula),
+  // but those suggestions are not facts — they're hints. Persisting them
+  // as the family's actual `recommended_items` would mean every imported
+  // row arrives with auto-invented needs that nobody at the source ever
+  // entered. The Family detail card and the Families list already fall
+  // back to rule-engine suggestions when `recommended_items` is unset,
+  // so the user still SEES the same hints in the UI — they just aren't
+  // stamped onto the database row as if the source had provided them.
+  // The admin adds real items via the Current Needs card's Edit button.
   const scored = computeRuleScore(family);
   family.priority_score = scored.priority_score;
   family.priority_level = scored.priority_level;
   family.ai_reason = scored.reason;
-  family.recommended_items = scored.recommended_items;
 
   await db.families.put(family);
   return family;

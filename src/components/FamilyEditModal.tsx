@@ -30,6 +30,7 @@ import {
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
 import { computeRuleScore } from '@/services/priorityRules';
+import { findDuplicateFamily } from '@/services/familyDuplicates';
 import {
   parseSpreadsheet,
   proposeColumnMapping,
@@ -314,6 +315,30 @@ export default function FamilyEditModal({
       // won, but timestamp-based ids waste a millisecond and make logs
       // confusing. One call, reused.
       const family_id = existing?.family_id ?? newFamilyId();
+
+      // Duplicate guard — same head-of-household + same member count is
+      // treated as a duplicate by every creation path (manual form,
+      // spreadsheet wizard, photo ingest). On EDIT we pass `family_id`
+      // as excludeId so the family is never flagged against itself.
+      // We surface the existing F-ID so the admin knows where to go
+      // edit instead of creating a clone.
+      const dup = await findDuplicateFamily(
+        headName.trim(),
+        memberCount,
+        existing?.family_id ?? family_id
+      );
+      if (dup) {
+        setError(
+          t('families_edit.duplicate_error', {
+            name: dup.head_name,
+            id: dup.family_id,
+            members: dup.member_count,
+            defaultValue: `A family "${dup.head_name}" with ${dup.member_count} members already exists (${dup.family_id}). Open that family to edit instead of creating a duplicate.`,
+          })
+        );
+        setSaving(false);
+        return;
+      }
       // Build the family row preserving cached AI fields when editing.
       const family: Family = {
         ...(existing ?? { family_id }),
@@ -337,15 +362,22 @@ export default function FamilyEditModal({
       // Recompute the rule-based priority so the new data is reflected
       // immediately. The user can still re-run the AI prioritization
       // from the Families page header for a more nuanced score.
+      //
+      // DELIBERATELY skipped: r.recommended_items. The rule engine CAN
+      // suggest items from demographics (e.g. children<5 → infant formula)
+      // but those suggestions are hints, not facts. Persisting them on a
+      // new family (manual create OR spreadsheet wizard) would stamp
+      // auto-invented needs that the source never entered. For EDITS the
+      // existing family's recommended_items propagates automatically via
+      // the `...existing` spread above, so worker-curated lists are
+      // preserved without any special handling here. The UI still shows
+      // rule-engine suggestions as a soft fallback when the field is
+      // unset (see FamilyRow + CurrentNeedsCard), so the helpful hints
+      // stay visible without becoming database facts.
       const r = computeRuleScore(family);
       family.priority_score = r.priority_score;
       family.priority_level = r.priority_level;
       family.ai_reason = r.reason;
-      // Only seed recommended_items if the family doesn't already have a
-      // worker-curated list (avoid clobbering "next visit needs").
-      if (!family.recommended_items?.length) {
-        family.recommended_items = r.recommended_items;
-      }
 
       await db.families.put(family);
       // In wizard mode, advance to the next row instead of closing — the
@@ -705,6 +737,20 @@ export default function FamilyEditModal({
         )}
 
         <div className="px-5 py-4 space-y-4 overflow-y-auto">
+          {/* Error banner — pinned at the top of the form body so a
+              duplicate warning (or any other save-blocking validation
+              error) is visible the moment the admin lands on the modal,
+              without having to scroll past every field first. */}
+          {error && (
+            <div
+              role="alert"
+              className="text-xs px-3 py-2 rounded-lg bg-priority-critical/10 border border-priority-critical/30 text-priority-critical flex items-start gap-2"
+            >
+              <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
           {/* Head of household */}
           <Field label={t('families_edit.head_name')} required>
             <input
@@ -937,13 +983,6 @@ export default function FamilyEditModal({
               </Field>
             </div>
           </details>
-
-          {error && (
-            <div className="text-xs px-3 py-2 rounded-lg bg-priority-critical/10 border border-priority-critical/30 text-priority-critical flex items-start gap-2">
-              <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
-              <span>{error}</span>
-            </div>
-          )}
         </div>
 
         <footer className="px-5 py-3 border-t border-slate-700 flex justify-between items-center gap-2 bg-surface-deep/50">

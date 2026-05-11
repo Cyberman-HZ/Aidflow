@@ -2,6 +2,7 @@
 // Names and locations are illustrative — they don't reference real individuals.
 
 import { db, isSeeded } from './database';
+import { computeRuleScore } from '@/services/priorityRules';
 import type {
   Family,
   AidDistribution,
@@ -423,6 +424,21 @@ const guides: AidGuide[] = [
 
 export async function seedIfEmpty(): Promise<void> {
   if (await isSeeded()) return;
+
+  // Stamp each seeded family with explicit `recommended_items` derived
+  // from the rule engine. After the import-autoseed bug fix, the UI no
+  // longer falls back to the rule engine when `recommended_items` is
+  // unset — undefined means "no items, period." So seeded demo families
+  // need their items baked in here, ONCE at seed time, otherwise the
+  // demo cards would render empty Current Needs sections on first load.
+  // Real imports (CSV / photo) deliberately bypass this and leave the
+  // field undefined; only the seeded fixtures get the courtesy items.
+  const seededFamilies: Family[] = families.map((f) => {
+    if (f.recommended_items && f.recommended_items.length > 0) return f;
+    const r = computeRuleScore(f);
+    return { ...f, recommended_items: r.recommended_items };
+  });
+
   await db.transaction(
     'rw',
     [
@@ -435,7 +451,7 @@ export async function seedIfEmpty(): Promise<void> {
       db.guides,
     ],
     async () => {
-      await db.families.bulkAdd(families);
+      await db.families.bulkAdd(seededFamilies);
       await db.distributions.bulkAdd(distributions);
       await db.providers.bulkAdd(providers);
       await db.users.bulkAdd(users);
