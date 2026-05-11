@@ -172,8 +172,7 @@ The output in `dist/` is a static PWA — no server required to host it.
 ├── .gitignore                ← excludes node_modules, dist, .tsbuildinfo, etc.
 │
 ├── docs/
-│   ├── AidFlow_Pro_Plan.pdf  ← original product plan (background reading)
-│   └── internal/             ← dev-time QA audits and debug reports
+│   └── AidFlow_Pro_Plan.pdf  ← original product plan (background reading)
 │
 ├── public/
 │   ├── logo.png              ← app logo (also the PWA icon)
