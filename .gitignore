@@ -23,6 +23,8 @@ vite.config.js
 
 # Claude Code local settings
 .claude/settings.local.json
+# Claude Code session handoff doc (kept locally, not committed)
+CLAUDE.md
 
 # Editor
 .vscode/*
