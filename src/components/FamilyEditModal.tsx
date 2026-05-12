@@ -642,7 +642,7 @@ export default function FamilyEditModal({
                   <span>
                     {t(
                       'paper_form.inline_hint',
-                      'Have a paper form? Snap a photo and Gemma 4 vision reads each row.'
+                      'Have a paper form? Snap a photo and the local AI reads each row.'
                     )}
                   </span>
                 </div>
@@ -653,7 +653,7 @@ export default function FamilyEditModal({
                   title={
                     t(
                       'paper_form.button_tip',
-                      'Snap a photo of a paper registration form. Gemma 4 vision reads each row offline.'
+                      'Snap a photo of a paper registration form. The local AI reads each row offline.'
                     ) ?? undefined
                   }
                 >
@@ -675,7 +675,7 @@ export default function FamilyEditModal({
                   {importMapping?.source === 'ai' && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-ai/20 text-ai inline-flex items-center gap-1">
                       <Sparkles size={9} />
-                      {t('import.ai_badge', 'Mapped by Gemma 4')}
+                      {t('import.ai_badge', 'AI-mapped')}
                     </span>
                   )}
                   {importMapping?.source === 'heuristic' && (

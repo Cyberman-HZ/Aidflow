@@ -389,8 +389,8 @@ export async function commitFamilyCandidate(
     last_updated: now,
     // Stash a provenance note so audit trails can see "imported from photo".
     notes: candidate.notes
-      ? `${candidate.notes}\n\n[Imported from paper form via Gemma 4 vision on ${now.slice(0, 10)}]`
-      : `[Imported from paper form via Gemma 4 vision on ${now.slice(0, 10)}]`,
+      ? `${candidate.notes}\n\n[Imported from paper form via AI vision on ${now.slice(0, 10)}]`
+      : `[Imported from paper form via AI vision on ${now.slice(0, 10)}]`,
   };
 
   // Compute the priority score / level / reason from demographics so the

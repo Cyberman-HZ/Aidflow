@@ -23,7 +23,7 @@ import { COUNTRIES as STARLINK_COUNTRIES } from '@/services/starlinkCountries';
 // Capability self-description shown when the admin clicks the
 // "Ask me what I can do?" suggested prompt in the chat. Hand-authored
 // (instead of generated) so it stays accurate, instant, and offline-safe.
-const ASSISTANT_CAPABILITIES_REPLY = `Here's what I can help you with — all answered offline using **Gemma 4** running locally on this machine.
+const ASSISTANT_CAPABILITIES_REPLY = `Here's what I can help you with — all answered offline by the local AI running on this machine.
 
 ## Coordinator decision support
 - **Morning briefing** — summarize yesterday vs today, surface what needs attention before noon.

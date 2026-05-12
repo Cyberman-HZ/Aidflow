@@ -689,7 +689,7 @@ export default function AIChat({
         {
           role: 'assistant',
           content:
-            'Sorry — I could not reach Gemma 4. Make sure Ollama is running with `OLLAMA_ORIGINS=*` and the model `gemma4:e4b` is pulled.',
+            'Sorry — I could not reach the local AI. Make sure Ollama is running with `OLLAMA_ORIGINS=*` and the model `gemma4:e4b` is pulled.',
         },
       ]);
     } finally {
@@ -971,7 +971,7 @@ function Bubble({
       >
         {!isUser && (
           <div className="flex items-center gap-1.5 text-xs text-ai mb-1.5 font-medium">
-            <Sparkles size={12} /> Gemma 4
+            <Sparkles size={12} /> AidFlow Assistant
           </div>
         )}
         {!isUser && toolReads.length > 0 && (
@@ -1007,7 +1007,7 @@ function Bubble({
               </span>
             ) : failedCount > 0 ? (
               <span className="italic text-amber-400 text-xs">
-                ⚠ Gemma 4 tried to propose {failedCount === 1 ? 'a change' : `${failedCount} changes`} but the action JSON was malformed and ignored. Try rephrasing your request, e.g. "remove water" or "add 4 water".
+                ⚠ The AI tried to propose {failedCount === 1 ? 'a change' : `${failedCount} changes`} but the action JSON was malformed and ignored. Try rephrasing your request, e.g. "remove water" or "add 4 water".
               </span>
             ) : (
               '…'

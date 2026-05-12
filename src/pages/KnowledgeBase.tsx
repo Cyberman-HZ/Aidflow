@@ -203,7 +203,7 @@ ${summaryMdToHtml(summaryText)}
       : ''
   }
   <footer>
-    AidFlow Pro · AI summary by Gemma 4 E4B · Source: ${escapeHtml(doc.source_filename || doc.title)}
+    AidFlow Pro · AI summary · Source: ${escapeHtml(doc.source_filename || doc.title)}
   </footer>
 </body>
 </html>`;
@@ -450,7 +450,7 @@ function DocumentsSection({ docs }: { docs: KnowledgeDocument[] }) {
     truncated: boolean
   ) => {
     if (!summaryText.trim()) return;
-    const header = `# ${doc.title}\n\n_AI summary in ${langName(summaryLang)} · ${new Date().toLocaleString()} · AidFlow Pro / Gemma 4 E4B_\n\n---\n\n`;
+    const header = `# ${doc.title}\n\n_AI summary in ${langName(summaryLang)} · ${new Date().toLocaleString()} · AidFlow Pro_\n\n---\n\n`;
     const truncationNote = truncated
       ? `\n\n---\n\n_Note: the source document is longer than the model can read in one pass; this summary covers only the beginning._\n`
       : '';
