@@ -761,7 +761,7 @@ export async function* summarizeDocumentStream(
     yield {
       kind: 'delta',
       text:
-        'Gemma 4 produced no usable section outlines for this document. Make sure Ollama is running smoothly and try again.',
+        'The local AI produced no usable section outlines for this document. Make sure Ollama is running smoothly and try again.',
     };
     yield {
       kind: 'done',

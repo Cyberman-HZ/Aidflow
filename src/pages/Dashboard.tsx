@@ -141,7 +141,7 @@ const buildSummaryPrintDoc = (
   };
   const sourceLabel =
     source === 'ai'
-      ? 'AI brief (Gemma 4 E4B via Ollama)'
+      ? 'AI brief (local model via Ollama)'
       : source === 'rules'
       ? 'Rule-based fallback (Ollama unreachable)'
       : '';
@@ -795,7 +795,7 @@ export default function Dashboard() {
       if (!cleaned) {
         setSummary(ruleBasedSummary(payload));
         setSummarySource('rules');
-        setSummaryError('Gemma 4 returned an empty response — showing a rule-based summary instead.');
+        setSummaryError('The local AI returned an empty response — showing a rule-based summary instead.');
       } else {
         setSummary(cleaned);
         setSummarySource('ai');
@@ -804,7 +804,7 @@ export default function Dashboard() {
       const msg = e instanceof Error ? e.message : String(e);
       setSummary(ruleBasedSummary(payload));
       setSummarySource('rules');
-      setSummaryError(`Gemma 4 request failed: ${msg}. Showing a rule-based summary instead.`);
+      setSummaryError(`AI request failed: ${msg}. Showing a rule-based summary instead.`);
     } finally {
       setGenerating(false);
     }
@@ -831,7 +831,7 @@ export default function Dashboard() {
             <Sparkles size={14} className="text-ai" /> AI Executive Summary
             {summarySource === 'ai' && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-ai/15 text-ai font-semibold">
-                Gemma 4
+                AI
               </span>
             )}
             {summarySource === 'rules' && (
@@ -884,7 +884,7 @@ export default function Dashboard() {
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary}</ReactMarkdown>
           </div>
         ) : generating ? (
-          <p className="text-sm text-slate-500 italic">Asking Gemma 4 to draft the executive brief…</p>
+          <p className="text-sm text-slate-500 italic">Drafting the executive brief…</p>
         ) : (
           <p className="text-sm text-slate-500">{t('reports.summary_placeholder')}</p>
         )}

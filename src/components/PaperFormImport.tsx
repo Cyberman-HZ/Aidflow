@@ -221,7 +221,7 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
                 {t('paper_form.title', 'Import families from a photo')}
               </h2>
               <p className="text-xs text-slate-400 truncate">
-                {t('paper_form.subtitle', 'Snap a registration form. Gemma 4 vision reads each row offline. You review and Apply.')}
+                {t('paper_form.subtitle', 'Snap a registration form. The local AI reads each row offline. You review and Apply.')}
               </p>
             </div>
           </div>
@@ -694,7 +694,7 @@ function PreviewStage({
           className="touch-target px-4 py-2 bg-ai hover:bg-violet-600 text-white text-sm font-semibold rounded-md flex items-center gap-2"
         >
           <Sparkles size={14} />
-          {t('paper_form.analyze', 'Extract families with Gemma 4')}
+          {t('paper_form.analyze', 'Extract families')}
         </button>
       </div>
       <PrivacyFooter t={t} />
@@ -715,7 +715,7 @@ function AnalyzingStage({ previewUrl, t }: { previewUrl: string | undefined; t: 
       <div className="flex items-center justify-center gap-2 text-sm text-slate-300">
         <Sparkles size={16} className="text-ai animate-pulse" />
         <span>
-          {t('paper_form.analyzing', 'Gemma 4 is reading the form locally — this can take 30 s to a few minutes on a CPU.')}
+          {t('paper_form.analyzing', 'Reading the form locally — this can take 30 s to a few minutes on a CPU.')}
         </span>
       </div>
       <p className="text-xs text-slate-500 max-w-md mx-auto">
@@ -752,7 +752,7 @@ function ReviewStage({
         <AlertTriangle size={28} className="mx-auto text-amber-400" />
         <p className="text-sm text-slate-200">
           {t('paper_form.no_rows') ??
-            "Gemma 4 didn't find any family rows in that photo."}
+            "No family rows were found in that photo."}
         </p>
         {imageWarnings.length > 0 && (
           <ul className="text-xs text-slate-400 max-w-md mx-auto list-disc list-inside space-y-1">
@@ -923,7 +923,7 @@ function CandidateCard({
           className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase tracking-wide flex-shrink-0 ${
             confidenceColor[c.confidence]
           }`}
-          title={t('paper_form.confidence_tooltip', "Gemma 4's self-rated confidence on this row")}
+          title={t('paper_form.confidence_tooltip', "Self-rated confidence on this row")}
         >
           {c.confidence}
         </span>
@@ -1063,7 +1063,7 @@ function CandidateCard({
           >
             {showRaw
               ? t('paper_form.hide_raw', 'hide raw text')
-              : t('paper_form.show_raw', 'show raw text Gemma read')}
+              : t('paper_form.show_raw', 'show raw extracted text')}
           </button>
           {showRaw && (
             <pre className="mt-1 text-slate-400 whitespace-pre-wrap bg-surface px-2 py-1.5 rounded border border-slate-800">

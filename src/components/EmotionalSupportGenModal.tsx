@@ -226,7 +226,7 @@ export default function EmotionalSupportGenModal({
               {t('kids_gen.title', 'Generate emotional-support content')}
             </h2>
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-ai/15 text-ai font-semibold">
-              Gemma 4
+              AI
             </span>
           </div>
           <button
@@ -391,7 +391,7 @@ export default function EmotionalSupportGenModal({
             <div className="space-y-3">
               <div className="text-xs text-ai italic flex items-center gap-2">
                 <Sparkles size={12} className="animate-pulse" />
-                {t('kids_gen.streaming', 'Gemma 4 is writing…')}
+                {t('kids_gen.streaming', 'Writing…')}
               </div>
               <div
                 className="prose-ai text-sm text-slate-200 bg-surface-deep border border-slate-700 rounded-lg p-3 min-h-[160px] max-h-[50vh] overflow-y-auto"
