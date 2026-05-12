@@ -247,6 +247,7 @@ export default function KnowledgeBase() {
   );
 }
 
+
 // ===== Documents section =================================================
 
 // One in-flight summary (open card) at a time. The `progress` field is

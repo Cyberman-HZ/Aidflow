@@ -65,24 +65,28 @@ export default function Layout() {
         >
           {open ? <X size={24} /> : <Menu size={24} />}
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center">
+          {/* Logo only — the wordmark is inside the image. The fallback
+              letter tile + "AidFlow Pro" text only show if the file is
+              missing (degenerate case). */}
           <img
             src="/logo.png"
             alt="AidFlow Pro"
-            className="h-8 w-auto object-contain"
+            className="h-11 w-auto object-contain"
             onError={(e) => {
-              // Fallback to the old letter tile if the file is missing
               (e.currentTarget as HTMLImageElement).style.display = 'none';
-              (e.currentTarget.nextSibling as HTMLElement | null)?.style?.setProperty('display', 'grid');
+              (e.currentTarget.nextSibling as HTMLElement | null)?.style?.setProperty('display', 'inline-flex');
             }}
           />
-          <div
-            className="w-7 h-7 rounded bg-brand grid place-items-center"
+          <span
+            className="hidden items-center gap-2"
             style={{ display: 'none' }}
           >
-            <span className="text-white font-bold">A</span>
-          </div>
-          <span className="font-semibold">{t('app.name')}</span>
+            <span className="w-7 h-7 rounded bg-brand grid place-items-center">
+              <span className="text-white font-bold">A</span>
+            </span>
+            <span className="font-semibold">{t('app.name')}</span>
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <ThemeToggle />
@@ -97,29 +101,34 @@ export default function Layout() {
             open ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
           }`}
         >
-          <div className="hidden md:flex h-16 px-5 items-center border-b border-slate-700 gap-3">
+          <div className="hidden md:flex h-28 px-2 items-center justify-center border-b border-slate-700">
+            {/* Logo only — the artwork already contains the "AIDFLOW"
+                wordmark, so a sibling text block would be redundant.
+                Header is sized to give the logo real presence (h-28 =
+                112 px tall, logo h-24 = 96 px). The fallback letter
+                tile (shown when /logo.png is missing) keeps the
+                "AidFlow Pro" label since it has no wordmark of its own. */}
             <img
               src="/logo.png"
               alt="AidFlow Pro"
-              className="h-10 w-auto object-contain"
+              className="h-24 w-auto object-contain"
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).style.display = 'none';
-                (e.currentTarget.nextSibling as HTMLElement | null)?.style?.setProperty('display', 'grid');
+                (e.currentTarget.nextSibling as HTMLElement | null)?.style?.setProperty('display', 'inline-flex');
               }}
             />
-            <div
-              className="w-9 h-9 rounded-lg bg-brand grid place-items-center shadow-lg shadow-brand/30"
+            <span
+              className="hidden items-center gap-2"
               style={{ display: 'none' }}
             >
-              <span className="text-white font-bold text-lg">A</span>
-            </div>
-            <div>
-              <div className="font-semibold text-base leading-tight">{t('app.name')}</div>
-              <div className="text-xs text-slate-400 leading-tight">{t('app.tagline')}</div>
-            </div>
+              <span className="w-10 h-10 rounded-lg bg-brand grid place-items-center shadow-lg shadow-brand/30">
+                <span className="text-white font-bold text-lg">A</span>
+              </span>
+              <span className="font-semibold text-base">{t('app.name')}</span>
+            </span>
           </div>
 
-          <nav className="px-3 py-3 space-y-1 overflow-y-auto h-[calc(100vh-4rem)]">
+          <nav className="px-3 py-3 space-y-1 overflow-y-auto h-[calc(100vh-7rem)]">
             {items.map((it) => (
               <NavLink
                 key={it.to}

@@ -47,23 +47,30 @@ export default function Login() {
       </div>
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
+          {/* Logo only — the artwork already contains both the icon and
+              the "AIDFLOW" wordmark, so sibling app.name + app.tagline
+              text would be redundant. The fallback (no logo.png) keeps
+              the brand name and tagline because the letter tile by
+              itself doesn't communicate the brand. */}
           <img
             src="/logo.png"
             alt="AidFlow Pro"
-            className="mx-auto mb-4 h-20 w-auto object-contain"
+            className="mx-auto h-32 w-auto object-contain"
             onError={(e) => {
               (e.currentTarget as HTMLImageElement).style.display = 'none';
-              (e.currentTarget.nextSibling as HTMLElement | null)?.style?.setProperty('display', 'inline-flex');
+              (e.currentTarget.nextSibling as HTMLElement | null)?.style?.setProperty('display', 'block');
             }}
           />
           <div
-            className="inline-flex w-16 h-16 rounded-2xl bg-brand items-center justify-center mb-4 shadow-2xl shadow-brand/30"
+            className="hidden"
             style={{ display: 'none' }}
           >
-            <ShieldCheck className="text-white" size={32} />
+            <div className="inline-flex w-16 h-16 rounded-2xl bg-brand items-center justify-center mb-4 shadow-2xl shadow-brand/30">
+              <ShieldCheck className="text-white" size={32} />
+            </div>
+            <h1 className="text-3xl font-bold">{t('app.name')}</h1>
+            <p className="text-sm text-slate-400 mt-1">{t('app.tagline')}</p>
           </div>
-          <h1 className="text-3xl font-bold">{t('app.name')}</h1>
-          <p className="text-sm text-slate-400 mt-1">{t('app.tagline')}</p>
         </div>
 
         <form
