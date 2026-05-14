@@ -722,13 +722,14 @@ const TOOLS: Record<string, ToolEntry> = {
       function: {
         name: 'draft_dispatch_order',
         description:
-          "Draft a new aid distribution order from this family with these items. The order is NOT created until the admin clicks Apply on the card. `worker_id` is OPTIONAL — omit it (or pass an empty string) when the admin says they'll assign a worker themselves later; the order is then created in PENDING status and the admin can assign + dispatch from the Distribute page when ready. If the user does want it assigned now, call find_workers(available_only=true) first to pick someone not already busy. Use the family's current_needs list (from get_family) as the default items if the user didn't specify what to send.",
+          "Draft a new aid distribution order from this family with these items. The order is NOT created until the admin clicks Apply on the card. `family_id` MUST be the canonical 4-digit form returned by find_families or get_family (e.g. F-0388, never F-388 or F-38) — do not invent or truncate IDs. `worker_id` is OPTIONAL — omit it when the admin says they'll assign a worker themselves later; the order is then created in PENDING status and dispatched from /distribute. `items` is OPTIONAL — when omitted (or empty), the order uses the family's current_needs list (the same list shown on the family card), so a typical 'draft dispatches' prompt works without enumerating items per family. Only set `items` explicitly when the user said what to send.",
         parameters: {
           type: 'object',
           properties: {
             family_id: {
               type: 'string',
-              description: 'Recipient family.',
+              description:
+                'Recipient family — canonical 4-digit ID (F-0388, F-0042). Use find_families/get_family results verbatim; never truncate or pad differently.',
             },
             worker_id: {
               type: 'string',
@@ -737,7 +738,8 @@ const TOOLS: Record<string, ToolEntry> = {
             },
             items: {
               type: 'array',
-              description: 'List of items to deliver. Each entry has name and quantity.',
+              description:
+                "Optional. List of items to deliver, each {name, quantity}. Omit (or pass empty array) to use the family's current_needs list as the default — preferred for a bulk 'draft dispatches' prompt.",
               items: {
                 type: 'object',
               } as JSONSchemaProperty,
@@ -747,7 +749,7 @@ const TOOLS: Record<string, ToolEntry> = {
               description: 'Optional dispatch notes.',
             },
           },
-          required: ['family_id', 'items'],
+          required: ['family_id'],
         },
       },
     },
@@ -767,7 +769,11 @@ const TOOLS: Record<string, ToolEntry> = {
         (items.length > 4 ? `, +${items.length - 4} more` : '');
       const wid = asString(args.worker_id);
       const who = wid ? `worker ${wid}` : 'unassigned (admin will assign later)';
-      return `Dispatch ${summary || '(no items)'} to family ${asString(args.family_id)} · ${who}`;
+      // When items is empty the Apply path auto-fills from the family's
+      // current_needs list — surface that to the admin so the card label
+      // matches what actually gets created.
+      const itemsLabel = summary || "(uses family's current needs)";
+      return `Dispatch ${itemsLabel} to family ${asString(args.family_id)} · ${who}`;
     },
     execute: async (args, ctx) => ({
       status: 'proposed_to_user',
@@ -884,13 +890,45 @@ export async function applyToolCall(
   }
 
   if (call.function.name === 'draft_dispatch_order') {
-    const fid = asString(args.family_id) || ctx.scopedFamilyId || '';
-    const wid = asString(args.worker_id);
-    if (!fid) throw new Error('Missing family_id.');
+    const fidRaw = asString(args.family_id) || ctx.scopedFamilyId || '';
+    if (!fidRaw) throw new Error('Missing family_id.');
+
+    // Resolve the family. The model sometimes drops leading zeros (F-038
+    // instead of F-0388, or F-42 instead of F-0042). Try the literal ID
+    // first, then pad the numeric suffix to 4 digits as a fallback. This
+    // is forgiving without being magical — only zero-padding variants
+    // are tried, never substring matches that could resolve to the wrong
+    // family.
+    let family = await db.families.get(fidRaw);
+    let fid = fidRaw;
+    if (!family) {
+      const m = /^([Ff])-?(\d+)$/.exec(fidRaw.trim());
+      if (m) {
+        const padded = `${m[1].toUpperCase()}-${m[2].padStart(4, '0')}`;
+        if (padded !== fidRaw) {
+          family = await db.families.get(padded);
+          if (family) fid = padded;
+        }
+      }
+    }
+    if (!family) {
+      throw new Error(
+        `Family ${fidRaw} not found in the registry. The AI may have used a partial ID — IDs are canonical 4-digit form like F-0388. Open the Families page to confirm the correct one.`
+      );
+    }
+    if (family.deleted_at) {
+      throw new Error(`Family ${fid} was deleted from the registry.`);
+    }
+
     // worker_id is intentionally optional — unassigned orders are created
     // in PENDING status and the admin assigns + dispatches from /distribute.
+    const wid = asString(args.worker_id);
+
+    // Parse items. When the model omits them (typical for a bulk
+    // "draft dispatches" prompt), fall back to the family's current
+    // needs list — the same list the admin sees on the family card.
     const raw = Array.isArray(args.items) ? args.items : [];
-    const items = raw
+    let items = raw
       .map((i) => {
         const obj = (i ?? {}) as Record<string, unknown>;
         const name = asString(obj.name ?? obj.item_name ?? obj.item);
@@ -898,7 +936,15 @@ export async function applyToolCall(
         return name ? { name, quantity: qty } : null;
       })
       .filter(Boolean) as Array<{ name: string; quantity: number }>;
-    if (items.length === 0) throw new Error('No items specified for the order.');
+    if (items.length === 0 && family.recommended_items && family.recommended_items.length > 0) {
+      items = family.recommended_items.map((i) => ({ name: i.name, quantity: i.quantity }));
+    }
+    if (items.length === 0) {
+      throw new Error(
+        `No items specified, and family ${fid} has no current need items on record. Add items on the family card first, or include them explicitly in the prompt.`
+      );
+    }
+
     return {
       kind: 'draft_order',
       payload: {
