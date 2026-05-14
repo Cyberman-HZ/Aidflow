@@ -385,9 +385,9 @@ export async function prioritizeFamilies(
 //      thinking the write already happened.
 //
 // The loop bounds: at most 5 model rounds. This is enough for a query like
-// "find critical WASH families and draft dispatches" (find_families →
-// find_workers → N draft_dispatch_order calls) but small enough that a
-// stuck model cannot burn the laptop's CPU.
+// "find critical families in Sector-B-North and draft dispatches"
+// (find_families → find_workers → N draft_dispatch_order calls) but small
+// enough that a stuck model cannot burn the laptop's CPU.
 
 export interface ToolMessage {
   role: 'tool';

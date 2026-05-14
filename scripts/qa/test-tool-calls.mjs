@@ -23,7 +23,7 @@ const TOOLS = [
     function: {
       name: 'find_families',
       description:
-        'Search the family registry. Use for queries like "all critical families in WASH with no delivery in 7 days" — pass priority_level=CRITICAL, sector="WASH", min_days_since_last_aid=7. Returns matching family records sorted by priority score descending.',
+        'Search the family registry. Use for queries like "all critical families in Sector-B-North with no delivery in 7 days" — pass priority_level=CRITICAL, sector="Sector-B-North", min_days_since_last_aid=7. Returns matching family records sorted by priority score descending.',
       parameters: {
         type: 'object',
         properties: {
@@ -152,7 +152,7 @@ async function chat(messages, opts = {}) {
   const userTurn = {
     role: 'user',
     content:
-      'Find me all CRITICAL priority families in the WASH sector that have not received aid for at least 7 days.',
+      'Find me all CRITICAL priority families in Sector-B-North that have not received aid for at least 7 days.',
   };
 
   const reply1 = await step('Tool-call request → /api/chat with tools', () =>
@@ -180,7 +180,7 @@ async function chat(messages, opts = {}) {
       {
         family_id: 'F-001',
         head_name: 'Aisha Hassan',
-        sector: 'WASH',
+        sector: 'Sector-B-North',
         priority_level: 'CRITICAL',
         priority_score: 92,
         days_since_last_aid: 9,
@@ -188,7 +188,7 @@ async function chat(messages, opts = {}) {
       {
         family_id: 'F-007',
         head_name: 'Mohammed Diallo',
-        sector: 'WASH',
+        sector: 'Sector-B-North',
         priority_level: 'CRITICAL',
         priority_score: 88,
         days_since_last_aid: 12,

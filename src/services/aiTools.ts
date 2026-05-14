@@ -255,7 +255,7 @@ const TOOLS: Record<string, ToolEntry> = {
       function: {
         name: 'find_families',
         description:
-          'Search the family registry by combinable filters. Use this for queries like "all critical families in WASH with no delivery in 7 days" — pass priority_level=CRITICAL, sector="WASH", min_days_since_last_aid=7. Returns up to 50 compact family records sorted by priority score descending.',
+          'Search the family registry by combinable filters. Use this for queries like "all critical families in Sector-B-North with no delivery in 7 days" — pass priority_level=CRITICAL, sector="Sector-B-North", min_days_since_last_aid=7. Sector values are operational area names (e.g. "Sector-A-South", "Sector-B-North", "Amman") — match what the user typed against the available data; do not invent humanitarian-cluster shorthand like "WASH" or "Food" unless those literal strings appear in the registry. Returns up to 50 compact family records sorted by priority score descending.',
         parameters: {
           type: 'object',
           properties: {
