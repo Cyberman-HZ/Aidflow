@@ -693,7 +693,7 @@ const TOOLS: Record<string, ToolEntry> = {
       function: {
         name: 'draft_dispatch_order',
         description:
-          'Draft a new aid distribution order from this family to this worker with these items. The order is NOT created until the admin clicks Apply on the card. Use find_workers(available_only=true) first so you pick a worker not already busy. Use the family\'s current_needs list (from get_family) as the default items if the user did not specify what to send.',
+          "Draft a new aid distribution order from this family with these items. The order is NOT created until the admin clicks Apply on the card. `worker_id` is OPTIONAL — omit it (or pass an empty string) when the admin says they'll assign a worker themselves later; the order is then created in PENDING status and the admin can assign + dispatch from the Distribute page when ready. If the user does want it assigned now, call find_workers(available_only=true) first to pick someone not already busy. Use the family's current_needs list (from get_family) as the default items if the user didn't specify what to send.",
         parameters: {
           type: 'object',
           properties: {
@@ -703,7 +703,8 @@ const TOOLS: Record<string, ToolEntry> = {
             },
             worker_id: {
               type: 'string',
-              description: 'Worker who will perform the delivery.',
+              description:
+                'Optional. Worker who will perform the delivery. Omit to leave the order unassigned (admin assigns later).',
             },
             items: {
               type: 'array',
@@ -717,7 +718,7 @@ const TOOLS: Record<string, ToolEntry> = {
               description: 'Optional dispatch notes.',
             },
           },
-          required: ['family_id', 'worker_id', 'items'],
+          required: ['family_id', 'items'],
         },
       },
     },
@@ -735,7 +736,9 @@ const TOOLS: Record<string, ToolEntry> = {
           .slice(0, 4)
           .join(', ') +
         (items.length > 4 ? `, +${items.length - 4} more` : '');
-      return `Dispatch ${summary || '(no items)'} to family ${asString(args.family_id)} via worker ${asString(args.worker_id)}`;
+      const wid = asString(args.worker_id);
+      const who = wid ? `worker ${wid}` : 'unassigned (admin will assign later)';
+      return `Dispatch ${summary || '(no items)'} to family ${asString(args.family_id)} · ${who}`;
     },
     execute: async (args, ctx) => ({
       status: 'proposed_to_user',
@@ -834,7 +837,8 @@ export type ApplyOutcome =
 
 export interface DraftOrderPayload {
   family_id: string;
-  worker_id: string;
+  /** Optional. Orders may be created unassigned and assigned later from the Distribute page. */
+  worker_id?: string;
   items: Array<{ name: string; quantity: number; category?: string }>;
   notes?: string;
 }
@@ -854,7 +858,8 @@ export async function applyToolCall(
     const fid = asString(args.family_id) || ctx.scopedFamilyId || '';
     const wid = asString(args.worker_id);
     if (!fid) throw new Error('Missing family_id.');
-    if (!wid) throw new Error('Missing worker_id.');
+    // worker_id is intentionally optional — unassigned orders are created
+    // in PENDING status and the admin assigns + dispatches from /distribute.
     const raw = Array.isArray(args.items) ? args.items : [];
     const items = raw
       .map((i) => {
@@ -869,7 +874,7 @@ export async function applyToolCall(
       kind: 'draft_order',
       payload: {
         family_id: fid,
-        worker_id: wid,
+        worker_id: wid || undefined,
         items,
         notes: asString(args.notes) || undefined,
       },
@@ -902,8 +907,13 @@ export async function commitDraftOrder(
 ): Promise<{ distribution_id: string; order_number: number }> {
   const family = await db.families.get(payload.family_id);
   if (!family) throw new Error(`Family ${payload.family_id} not found.`);
-  const worker = await db.workers.get(payload.worker_id);
-  if (!worker) throw new Error(`Worker ${payload.worker_id} not found.`);
+  // worker_id is optional. When present, validate it exists so we don't
+  // create an order pointing at a phantom worker id. When absent, the order
+  // is created PENDING + unassigned; the admin assigns from /distribute.
+  if (payload.worker_id) {
+    const worker = await db.workers.get(payload.worker_id);
+    if (!worker) throw new Error(`Worker ${payload.worker_id} not found.`);
+  }
 
   const now = new Date().toISOString();
   const score = family.priority_score ?? computeRuleScore(family).priority_score;
@@ -920,7 +930,7 @@ export async function commitDraftOrder(
     items_distributed: items,
     created_at: now,
     created_by: createdBy,
-    assigned_to: payload.worker_id,
+    assigned_to: payload.worker_id || undefined,
     ai_priority_score: score,
     ai_reasoning: family.ai_reason ?? '',
     notes: payload.notes,
