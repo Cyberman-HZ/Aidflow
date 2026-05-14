@@ -180,7 +180,36 @@ function compactWorker(w: Worker) {
 
 async function loadFamilies(): Promise<Family[]> {
   const rows = await db.families.toArray();
-  return rows.filter((f) => !f.deleted_at);
+  const live = rows.filter((f) => !f.deleted_at);
+  // Ensure every family carries a priority_score + priority_level. The
+  // Families page computes these at render time via computeRuleScore but
+  // does NOT persist them by default — only the "Re-run AI prioritization"
+  // button writes priority_score back, and priority_level is never persisted.
+  // If the tools read the raw DB rows, filters like `priority_level=CRITICAL`
+  // match nothing (because every f.priority_level is undefined) — that's
+  // the "0 family/families matched" false-negative bug. Compute on the fly
+  // so tool results agree with what the user sees on the Families page.
+  const needsScoring = live.some(
+    (f) => f.priority_score === undefined || f.priority_level === undefined
+  );
+  if (!needsScoring) return live;
+  const dists = await db.distributions.toArray();
+  const byFamily = new Map<string, AidDistribution[]>();
+  for (const d of dists) {
+    const list = byFamily.get(d.family_id) ?? [];
+    list.push(d);
+    byFamily.set(d.family_id, list);
+  }
+  return live.map((f) => {
+    if (f.priority_score !== undefined && f.priority_level !== undefined) return f;
+    const r = computeRuleScore(f, byFamily.get(f.family_id) ?? []);
+    return {
+      ...f,
+      priority_score: f.priority_score ?? r.priority_score,
+      priority_level: f.priority_level ?? r.priority_level,
+      ai_reason: f.ai_reason ?? r.reason,
+    };
+  });
 }
 
 async function loadWorkers(): Promise<Worker[]> {
