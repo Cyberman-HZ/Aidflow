@@ -631,7 +631,7 @@ export default function Dashboard() {
     );
     lines.push(`- ${plural(t.families, 'family', 'families')} tracked, ${plural(t.workers_total, 'worker', 'workers')} on roster.`);
     lines.push('');
-    lines.push('## Gaps');
+    lines.push('## Gaps & risks');
     const gapsBefore = lines.length;
     if (t.critical_priority > 0)
       lines.push(`- ${plural(t.critical_priority, 'family', 'families')} currently at CRITICAL priority — need attention.`);
@@ -669,13 +669,13 @@ export default function Dashboard() {
     }
     if (lines.length === gapsBefore) lines.push('- No major operational gaps detected.');
     lines.push('');
-    lines.push('## Top critical families');
+    lines.push('## Top critical cases');
     for (const f of payload.top_critical_families) {
       const days = f.days_since_last_aid === null ? 'never' : `${f.days_since_last_aid}d ago`;
       lines.push(`- **${f.head_name}** (${f.family_id}, ${f.sector}) — score ${f.score}, last aid ${days}. ${f.reason}`);
     }
     lines.push('');
-    lines.push('## Recommended next actions');
+    lines.push('## Recommended actions');
     const recBefore = lines.length;
     if (t.pending_orders > 0) lines.push(`- Dispatch the ${plural(t.pending_orders, 'pending order', 'pending orders')}.`);
     if (t.stuck_24h > 0) lines.push(`- Reach out on the ${plural(t.stuck_24h, 'stuck order', 'stuck orders')} — confirm delivery or mark failed.`);
