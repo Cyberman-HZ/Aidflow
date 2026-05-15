@@ -86,6 +86,37 @@ export default function FamilyDetail() {
     recommended_items: recommended,
   };
 
+  // Capability hint shown as a click-to-reveal chip in the family-scoped
+  // chat's empty state. Surfaces the AI's edit-proposal abilities so the
+  // admin discovers them on day one instead of guessing what to type.
+  // Examples reference THIS family's actual data (first current need, first
+  // medical condition, current sector) so commands feel concrete, not
+  // abstract. Pure markdown — no model call, deterministic, offline-safe.
+  const firstNeed = recommended[0]?.name;
+  const firstMed = family.medical_conditions[0];
+  const familyChatCapabilitiesReply =
+    `Here's what I can do for **${family.head_name}** (${family.family_id}) — all offline, and every change is reviewed before it lands on the record.\n\n` +
+    `## Update need items\n` +
+    `- **"Add 4 drinking water"** — propose adding items to the current-needs list.\n` +
+    (firstNeed
+      ? `- **"Remove ${firstNeed}"** — propose removing an item entirely.\n` +
+        `- **"Subtract 1 ${firstNeed}"** — propose decrementing the quantity.\n`
+      : `- **"Remove water purification"** — propose removing an item entirely (once items exist).\n`) +
+    `\n## Update medical conditions\n` +
+    `- **"Add diabetes (chronic)"** — flag a new condition.\n` +
+    (firstMed ? `- **"Remove ${firstMed}"** — clear an existing flag.\n` : '') +
+    `\n## Update profile fields\n` +
+    `- **"Change displacement to refugee"**\n` +
+    `- **"Set income to minimal"**\n` +
+    `- **"Update member count to 8"**\n` +
+    `- **"Move family to a different sector"** (currently \`${family.location_sector}\`)\n` +
+    `\n## Ask about this family\n` +
+    `- **"When was the last delivery?"**\n` +
+    `- **"What items were given on the last visit?"**\n` +
+    `- **"Why is this family ${level}?"**\n` +
+    `- **"Has the family received any aid in the past 7 days?"**\n\n` +
+    `Every edit comes back as an **Apply / Discard** card — nothing changes on the record until you click Apply.`;
+
   return (
     <div className="space-y-5">
       <Link to="/families" className="text-sm text-brand hover:underline inline-flex items-center gap-1">
@@ -198,6 +229,12 @@ Be concise. Reference the family's specific situation. When the user asks for a 
             family={familyForAI}
             history={history}
             enableTools
+            suggestedPrompts={[
+              {
+                label: 'What can you do for this family?',
+                reply: familyChatCapabilitiesReply,
+              },
+            ]}
           />
         </div>
       </div>
