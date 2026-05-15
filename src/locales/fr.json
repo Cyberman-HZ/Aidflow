@@ -229,6 +229,7 @@
     "use_rag": "Rechercher dans la base de connaissances",
     "use_rag_locked": "La recherche dans la base de connaissances est toujours activée sur cette page.",
     "use_wiki": "Wikipedia web search",
+    "use_wiki_hint": "connexion Internet requise",
     "system_note": "Powered by your local Gemma 4 E4B — your data never leaves this device.",
     "examples": {
       "title": "Example queries",

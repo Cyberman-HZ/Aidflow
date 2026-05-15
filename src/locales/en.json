@@ -229,6 +229,7 @@
     "use_rag": "Search knowledge base",
     "use_rag_locked": "Knowledge-base search is always on for this page.",
     "use_wiki": "Wikipedia web search",
+    "use_wiki_hint": "requires internet",
     "system_note": "Powered by your local Gemma 4 E4B — your data never leaves this device.",
     "examples": {
       "title": "Example queries",

@@ -229,6 +229,7 @@
     "use_rag": "البحث في قاعدة المعرفة",
     "use_rag_locked": "البحث في قاعدة المعرفة مفعّل دائماً لهذه الصفحة.",
     "use_wiki": "Wikipedia web search",
+    "use_wiki_hint": "يتطلب اتصالاً بالإنترنت",
     "system_note": "Powered by your local Gemma 4 E4B — your data never leaves this device.",
     "examples": {
       "title": "Example queries",

@@ -899,6 +899,9 @@ export default function AIChat({
               />
               <Globe size={14} />
               {t('assistant.use_wiki')}
+              <span className="text-slate-500 italic text-[11px]">
+                ({t('assistant.use_wiki_hint', 'requires internet')})
+              </span>
             </label>
           )}
         </div>
