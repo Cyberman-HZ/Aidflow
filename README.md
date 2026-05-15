@@ -145,16 +145,6 @@ npm run preview   # serves the production build locally on http://localhost:4173
 
 The output in `dist/` is a static PWA — no server required to host it.
 
-### ⚠️ Common gotchas
-
-| Symptom | Fix |
-|---|---|
-| "Ollama unreachable" banner | You forgot `OLLAMA_ORIGINS=*` before `ollama serve`. |
-| RAG falls back to keyword search | `nomic-embed-text` not pulled; run `ollama pull nomic-embed-text`. |
-| Paper-form ingest returns no rows | Image is blurry, dark, or not actually a form. Re-shoot with better lighting and fill the frame. |
-| "Use camera" doesn't open the webcam | `getUserMedia` requires `https://` or `http://localhost`. If you served the build over plain HTTP on another host, the camera path falls back to the file picker. |
-| Vision inference is very slow | CPU-only is 30 s to a few minutes for `gemma4:e4b`. Expected; it's the same model doing the heavy lifting. |
-
 ## 🗂️ 4. Project file structure
 
 ```
@@ -265,6 +255,18 @@ The output in `dist/` is a static PWA — no server required to host it.
     └── types/
         └── index.ts                    ← shared TypeScript types (Family, AidDistribution, Worker, KnowledgeDocument, etc.)
 ```
+
+## 🔮 5. Where we're going next — an Android companion
+
+The hackathon entry is the coordinator-side console. The clear next step is taking the same architecture to the place where humanitarian data actually originates: **the field worker's phone, mid-tent-visit**.
+
+We plan an Android companion app powered by **Gemma 4 Nano on-device**, designed for realistic field constraints:
+
+- **📸 Photo-to-record capture.** A worker photographs a paper form, an ID card, or a medical referral; Gemma 4 vision extracts a structured candidate the worker reviews before saving locally on the phone.
+- **🌐 Real-time multilingual translation.** Spoken or written notes in Arabic, Pashto, Tigrinya, or Spanish get translated to the team's working language on-device, with the original preserved for audit. No internet required.
+- **📤 Sneakernet export & sync.** Captured records export to a portable file (JSON or QR-code burst) that the coordinator console imports later, when the worker returns to base or hands the phone to a supervisor. No cloud sync, no telemetry — the same privacy contract the coordinator console honors today.
+
+The combined system — coordinator console on the field laptop, capture app on every worker's phone, both running Gemma 4 locally — closes the last meter of the data path that paper currently fills.
 
 ## 🏆 Hackathon submission
 
