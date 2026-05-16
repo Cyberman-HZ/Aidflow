@@ -260,16 +260,21 @@ The output in `dist/` is a static PWA — no server required to host it.
 
 The hackathon entry is the coordinator-side console. The clear next step is taking the same architecture to the place where humanitarian data actually originates: **the field worker's phone, mid-tent-visit**.
 
-> **🚧 Already in beta.** The Android companion app — powered by **Gemma 4 Nano on-device** — is under active development in its own repository:
+> **🚧 Already in beta.** The Android companion — **AidFlow Pro Mobile** — runs **Gemma 4 E2B (~2.6 GB) on-device via LiteRT-LM with XNNPack acceleration** on Android 12+ (voice translation optimized for Android 13+). Beta builds and full architecture notes live in its own repository:
 > **[github.com/Cyberman-HZ/Aidflow-android-app-powered-by-gemma-4](https://github.com/Cyberman-HZ/Aidflow-android-app-powered-by-gemma-4)**
 
-The companion is designed for realistic field constraints:
+The companion is built for realistic field constraints — zero network calls after the one-time model download, no data ever leaving the device:
 
-- **📸 Photo-to-record capture.** A worker photographs a paper form, an ID card, or a medical referral; Gemma 4 vision extracts a structured candidate the worker reviews before saving locally on the phone.
-- **🌐 Real-time multilingual translation.** Spoken or written notes in Arabic, Pashto, Tigrinya, or Spanish get translated to the team's working language on-device, with the original preserved for audit. No internet required.
-- **📤 Sneakernet export & sync.** Captured records export to a portable file (JSON or QR-code burst) that the coordinator console imports later, when the worker returns to base or hands the phone to a supervisor. No cloud sync, no telemetry — the same privacy contract the coordinator console honors today.
+- **📸 Voice + photo family intake.** A worker speaks or photographs a registration; Gemma 4 vision and on-device speech extract a structured family record matching the web-app's canonical schema (`head_name`, `member_count`, `children_under_5`, …).
+- **📦 Relief-item identification from photos.** Snap a stack of supplies; the model identifies items with category and estimated quantity for fast inventory entry.
+- **📄 Document scanning with OCR.** Multi-page scans get auto-cropped, perspective-corrected, OCR'd, cleaned, and translated end-to-end. Built-in camera handles lens and flash control.
+- **🌐 Real-time translation across 20 languages.** English, Spanish, French, Arabic, Ukrainian, Russian, Polish, Turkish, Persian, Pashto, Urdu, Hindi, Bengali, Swahili, Amharic, Somali, Chinese (Simplified), Vietnamese, Tagalog. Voice and text both.
+- **📤 Excel / CSV / DOCX / TXT export** with column headers that match the web-app's canonical schema. A worker hands off a `.xlsx` over USB, Bluetooth, or local Wi-Fi, and the coordinator console imports it row-by-row through the existing spreadsheet wizard — no cloud sync, no telemetry, same privacy contract.
+- **🛡️ Offline-first.** Zero network calls after the one-time ~2.6 GB model download. Requires 3 GB free storage and 2 GB free RAM.
 
 The combined system — coordinator console on the field laptop, capture app on every worker's phone, both running Gemma 4 locally — closes the last meter of the data path that paper currently fills.
+
+*Known beta limitations:* multi-second inference latency on mid-range phones, occasional language gaps in the on-device speech recognizer, 60–90 second first-launch model load (subsequent launches ~15 s). Not yet hardened for unsupervised deployment in critical operations — see the Android repo's README for the full caveat list.
 
 ## 🏆 Hackathon submission
 
