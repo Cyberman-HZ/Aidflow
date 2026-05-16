@@ -260,7 +260,10 @@ The output in `dist/` is a static PWA — no server required to host it.
 
 The hackathon entry is the coordinator-side console. The clear next step is taking the same architecture to the place where humanitarian data actually originates: **the field worker's phone, mid-tent-visit**.
 
-We plan an Android companion app powered by **Gemma 4 Nano on-device**, designed for realistic field constraints:
+> **🚧 Already in beta.** The Android companion app — powered by **Gemma 4 Nano on-device** — is under active development in its own repository:
+> **[github.com/Cyberman-HZ/Aidflow-android-app-powered-by-gemma-4](https://github.com/Cyberman-HZ/Aidflow-android-app-powered-by-gemma-4)**
+
+The companion is designed for realistic field constraints:
 
 - **📸 Photo-to-record capture.** A worker photographs a paper form, an ID card, or a medical referral; Gemma 4 vision extracts a structured candidate the worker reviews before saving locally on the phone.
 - **🌐 Real-time multilingual translation.** Spoken or written notes in Arabic, Pashto, Tigrinya, or Spanish get translated to the team's working language on-device, with the original preserved for audit. No internet required.
