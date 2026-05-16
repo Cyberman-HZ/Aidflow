@@ -10,6 +10,7 @@ import {
   Smile,
   Map as MapIcon,
   MessageSquare,
+  Smartphone,
   Settings as Cog,
   LogOut,
   Menu,
@@ -44,6 +45,7 @@ export default function Layout() {
     { to: '/kids', label: t('nav.kids'), icon: Smile },
     { to: '/map', label: t('nav.map'), icon: MapIcon },
     { to: '/chat', label: t('nav.chat'), icon: MessageSquare },
+    { to: '/aidflow-android', label: t('nav.aidflow_android'), icon: Smartphone },
     { to: '/settings', label: t('nav.settings'), icon: Cog },
   ];
 

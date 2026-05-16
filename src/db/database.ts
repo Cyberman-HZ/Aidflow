@@ -16,6 +16,7 @@ import type {
   Worker,
   BitchatMessage,
   BitchatApk,
+  AidflowAndroidApk,
 } from '@/types';
 
 export class AidFlowDB extends Dexie {
@@ -30,6 +31,7 @@ export class AidFlowDB extends Dexie {
   workers!: Table<Worker, string>;
   messages!: Table<BitchatMessage, string>;
   bitchatApks!: Table<BitchatApk, string>;
+  aidflowAndroidApks!: Table<AidflowAndroidApk, string>;
   syncQueue!: Table<{ id?: number; kind: string; payload: unknown; created_at: string }, number>;
 
   constructor() {
@@ -192,6 +194,15 @@ export class AidFlowDB extends Dexie {
         });
       });
     });
+
+    // v9 — AidFlow Android companion-app APK cache. Singleton row keyed by
+    //      a fixed id ('aidflow-android'). Admin uploads the .apk once
+    //      while online; field teams pull it offline from the same AidFlow
+    //      instance. Mirrors the bitchatApks pattern (separate table so a
+    //      future iOS row can join without coupling the two products).
+    this.version(9).stores({
+      aidflowAndroidApks: 'id, version, uploaded_at',
+    });
   }
 
   /**
@@ -212,6 +223,7 @@ export class AidFlowDB extends Dexie {
       this.workers.clear(),
       this.messages.clear(),
       this.bitchatApks.clear(),
+      this.aidflowAndroidApks.clear(),
       this.syncQueue.clear(),
     ]);
   }

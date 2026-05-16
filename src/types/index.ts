@@ -273,6 +273,23 @@ export interface BitchatApk {
   release_notes?: string;
 }
 
+/**
+ * AidFlow Android companion-app APK record. Singleton row (id is
+ * always 'aidflow-android') — uploading a new build replaces the
+ * previous one so field teams always pull the latest.
+ */
+export interface AidflowAndroidApk {
+  id: string;
+  filename: string;
+  version: string;
+  size_bytes: number;
+  mime: string;
+  uploaded_at: string;
+  uploaded_by: string;
+  notes?: string;
+  data: Blob;
+}
+
 export type Continent =
   | 'Africa'
   | 'Asia-Pacific'
