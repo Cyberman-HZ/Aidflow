@@ -39,16 +39,18 @@ import {
 } from '@/services/aidflowAndroid';
 import { useAuthStore } from '@/stores/authStore';
 
-// Drop screenshots in public/screenshots/aidflow-android/ with these
-// filenames. Missing files render a small "not yet added" placeholder
-// via the <img onError> handler — the page never breaks on a 404.
+// Screenshots are served from public/screenshots/aidflow-android/. The
+// filenames below are the original Android-capture names (keeps capture
+// order in the filename itself). Missing files render a small "not yet
+// added" placeholder via the <img onError> handler — the page never
+// breaks on a 404 so it's safe to add/remove entries here at any time.
 const SCREENSHOTS: ReadonlyArray<{ src: string; alt: string }> = [
-  { src: '/screenshots/aidflow-android/01.png', alt: 'AidFlow Android — screenshot 1' },
-  { src: '/screenshots/aidflow-android/02.png', alt: 'AidFlow Android — screenshot 2' },
-  { src: '/screenshots/aidflow-android/03.png', alt: 'AidFlow Android — screenshot 3' },
-  { src: '/screenshots/aidflow-android/04.png', alt: 'AidFlow Android — screenshot 4' },
-  { src: '/screenshots/aidflow-android/05.png', alt: 'AidFlow Android — screenshot 5' },
-  { src: '/screenshots/aidflow-android/06.png', alt: 'AidFlow Android — screenshot 6' },
+  { src: '/screenshots/aidflow-android/Screenshot_20260516-141430.png', alt: 'AidFlow Android — screenshot 1' },
+  { src: '/screenshots/aidflow-android/Screenshot_20260516-141440.png', alt: 'AidFlow Android — screenshot 2' },
+  { src: '/screenshots/aidflow-android/Screenshot_20260516-141643.png', alt: 'AidFlow Android — screenshot 3' },
+  { src: '/screenshots/aidflow-android/Screenshot_20260516-141707.png', alt: 'AidFlow Android — screenshot 4' },
+  { src: '/screenshots/aidflow-android/Screenshot_20260516-141816.png', alt: 'AidFlow Android — screenshot 5' },
+  { src: '/screenshots/aidflow-android/Screenshot_20260516-141841.png', alt: 'AidFlow Android — screenshot 6' },
 ];
 
 export default function AidflowAndroid() {
@@ -225,7 +227,7 @@ export default function AidflowAndroid() {
         <p className="text-xs text-slate-500 mb-3">
           {t(
             'aidflow_android.screenshots_hint',
-            'Drop screenshots into public/screenshots/aidflow-android/ named 01.png … 06.png. Missing files show a placeholder.'
+            'A glimpse of the Android companion running on a real device.'
           )}
         </p>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
