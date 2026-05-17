@@ -58,6 +58,7 @@ Every feature below uses Gemma 4 directly. Read each row as *"what the AI does i
 |---|---|
 | **📸 Paper-form ingestion** — admin photographs a paper registration sheet; Gemma 4 vision reads each row into a structured JSON candidate (name, members, sector, displacement, income, medical conditions, notes) with high / medium / low confidence and a verbatim transcription. Each row appears as an Apply / Discard card. ([`formIngest.ts`](src/services/formIngest.ts), [`PaperFormImport.tsx`](src/components/PaperFormImport.tsx)) | A 6-family handwritten sheet goes from ~6 minutes of typing to ~90 seconds of photograph → review → Apply. Solves the *paper-first reality* — no more multi-day transcription lag, no more lost rows, verbatim text kept for audit. |
 | **🛠️ Native function calling** — an 11-tool catalog exposed to Gemma 4 via Ollama's `tools` parameter. Read tools (`get_family`, `find_families`, `get_distribution_history`, `list_active_orders`, `find_workers`) auto-execute against IndexedDB; write tools (`update_family_field`, `add/remove_family_need`, `add/remove_medical_condition`, `draft_dispatch_order`) surface as Apply / Discard cards. The model can never mutate state directly. ([`aiTools.ts`](src/services/aiTools.ts)) | The Assistant becomes an orchestrator, not a chatbot. *"Find critical families in Sector-B-North with no delivery in 7 days and draft dispatches"* fires a chain of tool calls and lands as actionable cards. Cuts a multi-screen workflow to one prompt. |
+| **🛡️ Explainable AI — every output is auditable** — every Gemma 4 invocation in AidFlow Pro writes a trace row capturing the exact data the model saw, every tool call's args + result, every PDF citation, whether the deterministic rule-engine fallback took over, and the final response. A **"How did I decide?"** button next to each AI output opens a side panel with the full trace; a dedicated **AI Audit Log** page (`/audit`) browses every trace recorded on the device, filterable by source, full-text searchable, exportable as JSON per-trace or as a bulk donor audit pack. ([`aiTrace.ts`](src/services/aiTrace.ts), [`TraceButton.tsx`](src/components/TraceButton.tsx), [`AiAudit.tsx`](src/pages/AiAudit.tsx)) | Safety & Trust by construction. Donors get audit-grade JSON they can replay offline; coordinators can spot-check any AI recommendation down to the byte that produced it; reviewers see the rule-engine fallback explicitly flagged when Ollama was unreachable — no silent degradation. 63 static assertions enforce the contract so the feature can't regress. |
 | **🎯 Explainable priority triage** — Gemma 4 receives a JSON snapshot of every family (composition, medical conditions, displacement, income, days since last aid) and returns a `priority_score` (0–100), `priority_level`, one-sentence `reason`, and `recommended_items` per family. Deterministic rule-engine fallback runs the same rubric offline. ([`prioritizeFamilies`](src/services/ollama.ts), [`priorityRules.ts`](src/services/priorityRules.ts)) | Triage stops being "loudest voice wins." Every family gets a defensible score with a sentence next to it. A quiet family of 11 with chronic malnutrition unseen for 15 days stops being invisible; donors and auditors can read *why* anyone is at the top of the queue. |
 | **📚 Retrieval-Augmented Knowledge Base** — admin uploads PDF protocols; the app chunks them, embeds each chunk with `nomic-embed-text` (keyword fallback when no embedder), and serves Gemma 4 only the top-N matched chunks per question. Every answer cites the exact PDF + page. Out-of-corpus refusal built into the system prompt. ([`rag.ts`](src/services/rag.ts)) | *"What's the oral rehydration ratio for a 2-year-old?"* returns the answer **with a citation** instead of a guess. New volunteers find protocols on Day 1 instead of digging through email. No hallucinated guidance. |
 | **🧠 Cross-document synthesis** — the same RAG retrieval scores chunks across the **entire library**, not scoped to one document. When a question's answer spans multiple PDFs, the chat pulls the top-k most relevant chunks regardless of source and Gemma 4 weaves them into a single response, citing every PDF it drew from. ([`retrieve()` in `rag.ts`](src/services/rag.ts)) | *"What are the top health risks during pregnancy in a crisis?"* returns one coherent answer pulling from the pregnancy-health PDF, the common-issues-during-crisis PDF, and the healthy-habits guide — with all three cited inline. The admin doesn't need to know which PDF holds the answer; Gemma 4 reads across them. |
@@ -177,7 +178,8 @@ The output in `dist/` is a static PWA — no server required to host it.
 │       ├── test-paper-form-ingest.mjs         ← live test: Gemma 4 vision (multimodal)
 │       ├── test-family-delete.mjs             ← soft-delete + audit log invariants
 │       ├── test-import-no-autoseed.mjs        ← imports never auto-invent need items
-│       └── test-duplicate-prevention.mjs      ← no-duplicate-family invariant across all 3 paths
+│       ├── test-duplicate-prevention.mjs      ← no-duplicate-family invariant across all 3 paths
+│       └── test-trace-shape.mjs               ← AI trace contract: type shape, v10 migration, service surface, callsite source values, /audit route wiring
 │
 └── src/
     ├── main.tsx              ← React entry; mounts <App />
@@ -187,7 +189,7 @@ The output in `dist/` is a static PWA — no server required to host it.
     ├── vite-env.d.ts         ← Vite client type augments
     │
     ├── components/
-    │   ├── AIChat.tsx                  ← reusable Gemma 4 chat panel (used by /assistant, /family/:id, /docs); renders tool-call chips, Apply/Discard cards, citations
+    │   ├── AIChat.tsx                  ← reusable Gemma 4 chat panel (used by /assistant, /family/:id, /docs); renders tool-call chips, Apply/Discard cards, citations, and the inline Trace button
     │   ├── Card.tsx                    ← presentational card wrapper
     │   ├── ConnectivityBanner.tsx      ← top-of-page Online / Local / Disconnected indicator
     │   ├── EditableDemographicsCard.tsx ← in-place edit for family demographics
@@ -202,10 +204,11 @@ The output in `dist/` is a static PWA — no server required to host it.
     │   ├── PriorityBadge.tsx           ← coloured CRITICAL / HIGH / MEDIUM / NORMAL pill
     │   ├── RequireAuth.tsx             ← route guard around the authed shell
     │   ├── StatusBadge.tsx             ← order-status pill (pending / out_for_delivery / …)
-    │   └── ThemeToggle.tsx             ← light / dark / system theme picker
+    │   ├── ThemeToggle.tsx             ← light / dark / system theme picker
+    │   └── TraceButton.tsx             ← "How did I decide?" button + sliding TracePanel; first-time discovery bubble + pulsing dot to drive attention
     │
     ├── db/
-    │   ├── database.ts                 ← Dexie schema + migrations (v1 through v8)
+    │   ├── database.ts                 ← Dexie schema + migrations (v1 through v10)
     │   └── seedData.ts                 ← mock families, distributions, workers, kids content
     │
     ├── locales/
@@ -215,6 +218,8 @@ The output in `dist/` is a static PWA — no server required to host it.
     │   └── es.json                     ← Spanish
     │
     ├── pages/
+    │   ├── AidflowAndroid.tsx          ← AidFlow Android — Beta companion-app distribution page (about, requirements, download / admin upload, install steps, screenshots)
+    │   ├── AiAudit.tsx                 ← AI Audit Log browser: every trace ever recorded, filterable by source, full-text searchable, JSON export
     │   ├── Assistant.tsx               ← global AI assistant with full registry context + tool calling
     │   ├── Bitchat.tsx                 ← mesh-chat install guide + APK download
     │   ├── Dashboard.tsx               ← KPIs, charts, AI executive summary, CSV / PDF export
@@ -231,6 +236,7 @@ The output in `dist/` is a static PWA — no server required to host it.
     ├── services/
     │   ├── ollama.ts                   ← Ollama client: chat(), chatStream(), chatWithTools(), chatWithImage(), embed(), prioritizeFamilies()
     │   ├── aiTools.ts                  ← function-calling tool catalog (11 tools, read + write, JSON schema + executors)
+    │   ├── aiTrace.ts                  ← explainable-AI audit trail: recordTrace, getTrace, listTraces, patchTrace, purgeOlderThan, exportTraceAsJson; recordTrace wraps the DB put in try/catch so an audit failure can never break the AI feature
     │   ├── formIngest.ts               ← paper-form vision pipeline: prompt + schema validation + commit
     │   ├── imageUtils.ts               ← file → resized JPEG → base64 (Ollama-compatible)
     │   ├── familyActions.ts            ← legacy fenced-action protocol (kept as fallback for non-tool-calling models)
@@ -245,6 +251,7 @@ The output in `dist/` is a static PWA — no server required to host it.
     │   ├── starlinkCountries.ts        ← static country-availability snapshot
     │   ├── resellers.ts                ← Starlink retailer sync from public/data/
     │   ├── bitchat.ts                  ← Bitchat APK metadata + delivery
+    │   ├── aidflowAndroid.ts           ← AidFlow Android APK distribution (upload, download, getApkInfo, delete) — singleton in IndexedDB so field teams can install offline
     │   └── webSearch.ts                ← Wikipedia search (opt-in, online-only)
     │
     ├── stores/
@@ -279,7 +286,7 @@ The combined system — coordinator console on the field laptop, capture app on 
 ## 🏆 Hackathon submission
 
 - **Hackathon:** [Gemma 4 Good Hackathon](https://kaggle.com/competitions/gemma-4-good-hackathon)
-- **Track:** Global Resilience (with secondary alignment to Safety & Trust — citation-grounded RAG, Apply/Discard before any write, raw-text verification on every extraction)
+- **Track:** Global Resilience (with secondary alignment to Safety & Trust — citation-grounded RAG, Apply/Discard before any write, raw-text verification on every extraction, **and a byte-level AI Audit Log: every Gemma 4 invocation writes a trace row capturing inputs / tool calls / citations / fallback usage / response, surfaced in a "How did I decide?" button next to each AI output and a browsable `/audit` page with JSON export**)
 - **Model:** Gemma 4 E4B served locally via Ollama at `http://localhost:11434`
 - **Gemma 4 features exercised:** native multimodal (paper-form vision ingest) and native function calling (11-tool catalog with read + write tools)
 - **Deliverables:** this repository (open source, MIT-licensed app code), a 3-minute demo video, a Kaggle Notebook write-up, this README
