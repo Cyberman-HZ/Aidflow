@@ -42,6 +42,8 @@ import { useConnectivityStore } from '@/stores/connectivityStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { computeRuleScore } from '@/services/priorityRules';
 import { chatStream, pingOllama } from '@/services/ollama';
+import { recordTrace } from '@/services/aiTrace';
+import TraceButton from '@/components/TraceButton';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -277,6 +279,7 @@ export default function Dashboard() {
   const [summary, setSummary] = useState('');
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [summarySource, setSummarySource] = useState<'ai' | 'rules' | null>(null);
+  const [summaryTraceId, setSummaryTraceId] = useState<string | undefined>(undefined);
   const [generating, setGenerating] = useState(false);
 
   // ---- Derived data --------------------------------------------------------
@@ -722,15 +725,32 @@ export default function Dashboard() {
     setSummary('');
     setSummaryError(null);
     setSummarySource(null);
+    setSummaryTraceId(undefined);
 
     const payload = buildSummaryPayload();
+    const startedAt = Date.now();
+    const inputsSummary =
+      `${payload.totals.families} families · ${payload.totals.deliveries_today} deliveries today · ` +
+      `${payload.totals.critical_priority} CRITICAL · ${payload.recent_family_deletions.length} recent deletions`;
 
     // Probe Ollama first so we can fall back gracefully.
     const reachable = await pingOllama();
     if (!reachable) {
-      setSummary(ruleBasedSummary(payload));
+      const text = ruleBasedSummary(payload);
+      setSummary(text);
       setSummarySource('rules');
       setSummaryError('Ollama is not reachable at localhost:11434 — showing a rule-based summary instead. Start Ollama (with `OLLAMA_ORIGINS=*`) and click again for the AI version.');
+      const traceId = await recordTrace({
+        source: 'dashboard_summary',
+        language,
+        inputs_summary: inputsSummary,
+        response_text: text,
+        fallback_used: true,
+        fallback_reason: 'Ollama unreachable at localhost:11434.',
+        duration_ms: Date.now() - startedAt,
+        metadata: { totals: payload.totals },
+      });
+      setSummaryTraceId(traceId);
       setGenerating(false);
       return;
     }
@@ -793,18 +813,55 @@ export default function Dashboard() {
       // heading so the rendered document always starts cleanly.
       const cleaned = acc.replace(/^[\s\S]*?(?=## )/, '').trim();
       if (!cleaned) {
-        setSummary(ruleBasedSummary(payload));
+        const text = ruleBasedSummary(payload);
+        setSummary(text);
         setSummarySource('rules');
         setSummaryError('The local AI returned an empty response — showing a rule-based summary instead.');
+        const traceId = await recordTrace({
+          source: 'dashboard_summary',
+          language,
+          inputs_summary: inputsSummary,
+          system_prompt: systemPrompt,
+          response_text: text,
+          fallback_used: true,
+          fallback_reason: 'Model returned an empty response after streaming.',
+          duration_ms: Date.now() - startedAt,
+          metadata: { totals: payload.totals },
+        });
+        setSummaryTraceId(traceId);
       } else {
         setSummary(cleaned);
         setSummarySource('ai');
+        const traceId = await recordTrace({
+          source: 'dashboard_summary',
+          language,
+          inputs_summary: inputsSummary,
+          system_prompt: systemPrompt,
+          response_text: cleaned,
+          duration_ms: Date.now() - startedAt,
+          metadata: { totals: payload.totals },
+        });
+        setSummaryTraceId(traceId);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setSummary(ruleBasedSummary(payload));
+      const text = ruleBasedSummary(payload);
+      setSummary(text);
       setSummarySource('rules');
       setSummaryError(`AI request failed: ${msg}. Showing a rule-based summary instead.`);
+      const traceId = await recordTrace({
+        source: 'dashboard_summary',
+        language,
+        inputs_summary: inputsSummary,
+        system_prompt: systemPrompt,
+        response_text: text,
+        fallback_used: true,
+        fallback_reason: `AI request failed: ${msg}`,
+        error: msg,
+        duration_ms: Date.now() - startedAt,
+        metadata: { totals: payload.totals },
+      });
+      setSummaryTraceId(traceId);
     } finally {
       setGenerating(false);
     }
@@ -839,6 +896,7 @@ export default function Dashboard() {
                 <WifiOff size={10} /> Rule-based fallback
               </span>
             )}
+            {summaryTraceId && <TraceButton traceId={summaryTraceId} />}
           </div>
         }
         action={

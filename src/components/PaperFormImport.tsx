@@ -45,6 +45,8 @@ import {
   type FamilyCandidate,
   type ConfidenceTag,
 } from '@/services/formIngest';
+import { recordTrace } from '@/services/aiTrace';
+import { useSettingsStore } from '@/stores/settingsStore';
 import {
   findDuplicateFamilySync,
   type DuplicateMatch,
@@ -69,6 +71,7 @@ interface CardStatus {
 
 export default function PaperFormImport({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
+  const language = useSettingsStore((s) => s.language);
   const [stage, setStage] = useState<Stage>('pick');
   const [image, setImage] = useState<ResizedImage | null>(null);
   const [candidates, setCandidates] = useState<FamilyCandidate[]>([]);
@@ -118,6 +121,7 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
     setStage('analyzing');
     setIngestError(null);
     setImageWarnings([]);
+    const startedAt = Date.now();
     try {
       const result = await extractFamiliesFromPhoto(image.base64);
       setCandidates(result.candidates);
@@ -127,10 +131,51 @@ export default function PaperFormImport({ onClose }: { onClose: () => void }) {
       for (const c of result.candidates) seed[c.candidate_id] = { status: 'pending' };
       setById(seed);
       setStage('review');
+      // Audit trace — captures what the model saw (image size, not bytes)
+      // and what it returned (candidate count + confidence distribution).
+      await recordTrace({
+        source: 'paper_form',
+        language,
+        inputs_summary: `Image ${image.width}×${image.height}, ${approxBase64Kb(image.base64)} KB`,
+        response_text: JSON.stringify(
+          {
+            candidate_count: result.candidates.length,
+            warnings: result.warnings,
+            confidences: result.candidates.reduce(
+              (acc, c) => ({ ...acc, [c.confidence]: (acc[c.confidence] ?? 0) + 1 }),
+              {} as Record<string, number>
+            ),
+            candidates_preview: result.candidates.map((c) => ({
+              head_name: c.head_name,
+              member_count: c.member_count,
+              confidence: c.confidence,
+            })),
+          },
+          null,
+          2
+        ),
+        duration_ms: Date.now() - startedAt,
+        metadata: {
+          image_width: image.width,
+          image_height: image.height,
+          image_kb: approxBase64Kb(image.base64),
+        },
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setIngestError(msg);
       setStage('preview'); // back to where they came from so they can retry
+      await recordTrace({
+        source: 'paper_form',
+        language,
+        inputs_summary: `Image ${image.width}×${image.height}, ${approxBase64Kb(image.base64)} KB`,
+        error: msg,
+        duration_ms: Date.now() - startedAt,
+        metadata: {
+          image_width: image.width,
+          image_height: image.height,
+        },
+      });
     }
   };
 

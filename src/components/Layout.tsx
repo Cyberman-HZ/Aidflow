@@ -11,6 +11,7 @@ import {
   Map as MapIcon,
   MessageSquare,
   Smartphone,
+  ShieldCheck,
   Settings as Cog,
   LogOut,
   Menu,
@@ -46,6 +47,7 @@ export default function Layout() {
     { to: '/map', label: t('nav.map'), icon: MapIcon },
     { to: '/chat', label: t('nav.chat'), icon: MessageSquare },
     { to: '/aidflow-android', label: t('nav.aidflow_android'), icon: Smartphone },
+    { to: '/audit', label: t('nav.audit'), icon: ShieldCheck },
     { to: '/settings', label: t('nav.settings'), icon: Cog },
   ];
 

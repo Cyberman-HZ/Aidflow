@@ -273,6 +273,84 @@ export interface BitchatApk {
   release_notes?: string;
 }
 
+// =========================================================================
+// AI Trace — explainable-AI audit log
+//
+// Every AI invocation in AidFlow Pro writes one of these rows. The Trace
+// button on each AI output (and the /audit page) reads them so admins,
+// donors, and auditors can see exactly what data the model saw, what
+// tools it ran, what citations it used, and whether the rule-engine
+// fallback took over. Pure-local provenance — never leaves the device.
+// =========================================================================
+
+/** One read-tool execution recorded during a chat turn. */
+export interface AiTraceToolRead {
+  name: string;
+  args: Record<string, unknown>;
+  /** Compact JSON-safe view of the tool's return value. */
+  result_summary: string;
+  error?: string;
+}
+
+/** One write-tool proposal — the model can't actually mutate state. */
+export interface AiTraceToolWrite {
+  name: string;
+  args: Record<string, unknown>;
+  description: string;
+  /** Whether the admin Applied or Discarded it (or it's still pending). */
+  status?: 'pending' | 'applied' | 'discarded' | 'failed';
+  error?: string;
+}
+
+/** One RAG citation — which PDF chunk the model drew from. */
+export interface AiTraceCitation {
+  doc_id?: string;
+  doc_title: string;
+  page?: number;
+  score?: number;
+  scoreKind?: 'embedding' | 'keyword';
+  /** Short snippet of the chunk text actually fed to the model. */
+  excerpt?: string;
+}
+
+/** Which surface produced this AI output. Used for filtering on /audit. */
+export type AiTraceSource =
+  | 'chat_tools'
+  | 'chat_rag'
+  | 'chat_plain'
+  | 'family_chat_scoped'
+  | 'dashboard_summary'
+  | 'priority_rank'
+  | 'paper_form'
+  | 'spreadsheet_map'
+  | 'kids_content';
+
+export interface AiTrace {
+  trace_id: string;
+  source: AiTraceSource;
+  created_at: string;
+  duration_ms?: number;
+  language: string;
+  model: string;
+  /** One-line description of the inputs (e.g. "13 families ranked"). */
+  inputs_summary: string;
+  /** Full system prompt as sent to the model. May be large. */
+  system_prompt?: string;
+  /** What the user typed / clicked / photographed. */
+  user_input?: string;
+  tool_reads?: AiTraceToolRead[];
+  tool_writes?: AiTraceToolWrite[];
+  citations?: AiTraceCitation[];
+  /** True when the deterministic rule-engine took over for Ollama. */
+  fallback_used?: boolean;
+  fallback_reason?: string;
+  /** The final assistant text (may be long for summaries). */
+  response_text?: string;
+  error?: string;
+  /** Open-ended extra context: per-family counts, image dimensions, etc. */
+  metadata?: Record<string, unknown>;
+}
+
 /**
  * AidFlow Android companion-app APK record. Singleton row (id is
  * always 'aidflow-android') — uploading a new build replaces the
@@ -335,6 +413,12 @@ export interface ChatMessage {
   content: string;
   timestamp?: string;
   citations?: Citation[];
+  /**
+   * AI trace id linking back to the aiTraces row that captured the
+   * inputs / tool calls / citations / response for this assistant turn.
+   * Powers the Trace button rendered alongside the message.
+   */
+  trace_id?: string;
 }
 
 export interface Citation {

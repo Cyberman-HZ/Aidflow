@@ -17,6 +17,7 @@ import type {
   BitchatMessage,
   BitchatApk,
   AidflowAndroidApk,
+  AiTrace,
 } from '@/types';
 
 export class AidFlowDB extends Dexie {
@@ -32,6 +33,7 @@ export class AidFlowDB extends Dexie {
   messages!: Table<BitchatMessage, string>;
   bitchatApks!: Table<BitchatApk, string>;
   aidflowAndroidApks!: Table<AidflowAndroidApk, string>;
+  aiTraces!: Table<AiTrace, string>;
   syncQueue!: Table<{ id?: number; kind: string; payload: unknown; created_at: string }, number>;
 
   constructor() {
@@ -203,6 +205,16 @@ export class AidFlowDB extends Dexie {
     this.version(9).stores({
       aidflowAndroidApks: 'id, version, uploaded_at',
     });
+
+    // v10 — AI trace log. Every AI invocation (chat with tools, RAG answer,
+    //       executive summary, prioritization batch, paper-form extraction)
+    //       writes a row capturing: inputs the model saw, tool reads/writes,
+    //       citations, fallback usage, response text. The Trace button on
+    //       every AI output reads these rows; the /audit page browses them.
+    //       Indexes: source (for filtering) and created_at (newest-first).
+    this.version(10).stores({
+      aiTraces: 'trace_id, source, created_at',
+    });
   }
 
   /**
@@ -224,6 +236,7 @@ export class AidFlowDB extends Dexie {
       this.messages.clear(),
       this.bitchatApks.clear(),
       this.aidflowAndroidApks.clear(),
+      this.aiTraces.clear(),
       this.syncQueue.clear(),
     ]);
   }

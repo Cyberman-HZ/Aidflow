@@ -18,8 +18,10 @@ import {
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
-import { prioritizeFamilies } from '@/services/ollama';
+import { prioritizeFamilies, pingOllama } from '@/services/ollama';
 import { computeRuleScore, sortByScore } from '@/services/priorityRules';
+import { recordTrace } from '@/services/aiTrace';
+import TraceButton from '@/components/TraceButton';
 import { useSettingsStore } from '@/stores/settingsStore';
 import PriorityBadge from '@/components/PriorityBadge';
 import { Card } from '@/components/Card';
@@ -50,6 +52,7 @@ export default function Families() {
   const [sortKey, setSortKey] = useState<SortKey>('score_desc');
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<PrioritizationResult[]>([]);
+  const [lastTraceId, setLastTraceId] = useState<string | undefined>(undefined);
   // "Add family" modal state. Editing is now done in-place on the family
   // detail page (linked from the pencil icon on each row), so we no longer
   // surface an edit modal here — the pencil takes the user straight into
@@ -159,6 +162,11 @@ export default function Families() {
   const runAI = async () => {
     if (running || families.length === 0) return;
     setRunning(true);
+    const startedAt = Date.now();
+    // Ping BEFORE the call so we know which branch will be taken — and
+    // so the trace can honestly report whether Gemma 4 actually ran or
+    // the deterministic rule engine fallback took over.
+    const reachable = await pingOllama();
     try {
       const out = await prioritizeFamilies(filtered, language);
       setResults(out);
@@ -179,6 +187,24 @@ export default function Families() {
           }
         }
       });
+      const traceId = await recordTrace({
+        source: 'priority_rank',
+        language,
+        inputs_summary: `Re-ranked ${filtered.length} family/families`,
+        response_text: out
+          .map((r) => `${r.family_id} → ${r.priority_score} (${r.priority_level}): ${r.reason}`)
+          .join('\n'),
+        fallback_used: !reachable,
+        fallback_reason: reachable
+          ? undefined
+          : 'Ollama unreachable at localhost:11434 — deterministic rule engine used.',
+        duration_ms: Date.now() - startedAt,
+        metadata: {
+          family_count: filtered.length,
+          critical_count: out.filter((r) => r.priority_level === 'CRITICAL').length,
+        },
+      });
+      setLastTraceId(traceId);
     } finally {
       setRunning(false);
     }
@@ -209,6 +235,9 @@ export default function Families() {
             {running ? <RefreshCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
             <span>{t('families.rerun_ai')}</span>
           </button>
+          {lastTraceId && !running && (
+            <TraceButton traceId={lastTraceId} variant="badge" label={t('trace.button_long', 'Trace last AI run')} />
+          )}
         </div>
       </header>
 

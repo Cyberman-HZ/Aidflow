@@ -24,6 +24,7 @@ import KidsContent from './pages/KidsContent';
 import StarlinkMap from './pages/StarlinkMap';
 import Bitchat from './pages/Bitchat';
 import AidflowAndroid from './pages/AidflowAndroid';
+import AiAudit from './pages/AiAudit';
 import Settings from './pages/Settings';
 
 export default function App() {
@@ -64,6 +65,7 @@ export default function App() {
         <Route path="/map" element={<StarlinkMap />} />
         <Route path="/chat" element={<Bitchat />} />
         <Route path="/aidflow-android" element={<AidflowAndroid />} />
+        <Route path="/audit" element={<AiAudit />} />
         <Route path="/settings" element={<Settings />} />
         {/* Old routes redirect to merged pages */}
         <Route path="/reports" element={<Navigate to="/dashboard" replace />} />

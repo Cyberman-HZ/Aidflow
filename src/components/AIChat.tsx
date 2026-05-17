@@ -42,6 +42,9 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/database';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useConnectivityStore } from '@/stores/connectivityStore';
+import { recordTrace, summarizeToolResult as toolResultForTrace } from '@/services/aiTrace';
+import TraceButton from '@/components/TraceButton';
+import type { AiTraceToolRead, AiTraceToolWrite } from '@/types';
 
 /**
  * Builds a tiny snapshot of the family that we PREPEND to the user's question
@@ -505,12 +508,14 @@ export default function AIChat({
           ? `${trimmed}\n${wikiBlock}${wikiInstruction}\n\nUse both your local knowledge base AND the Wikipedia excerpts above. Cite each.`
           : trimmed;
         let buffer = '';
+        const ragStartedAt = Date.now();
         const placeholderMsg: ChatMessage = {
           role: 'assistant',
           content: '',
           timestamp: new Date().toISOString(),
         };
         setMessages((m) => [...m, placeholderMsg]);
+        let finalCitations: NonNullable<ChatMessage['citations']> = [];
         for await (const evt of ragAnswerStream(augmentedQuestion, language)) {
           if (evt.kind === 'delta') {
             buffer += evt.text;
@@ -521,16 +526,37 @@ export default function AIChat({
             });
           } else {
             // 'done' — attach citations
+            finalCitations = [...allCitations, ...evt.citations];
             setMessages((m) => {
               const copy = [...m];
               copy[copy.length - 1] = {
                 ...copy[copy.length - 1],
-                citations: [...allCitations, ...evt.citations],
+                citations: finalCitations,
               };
               return copy;
             });
           }
         }
+        // Record audit trace AFTER stream completes; attach id to message.
+        const ragTraceId = await recordTrace({
+          source: 'chat_rag',
+          language,
+          inputs_summary: `RAG query · ${finalCitations.length} citation(s)`,
+          user_input: trimmed,
+          response_text: buffer,
+          duration_ms: Date.now() - ragStartedAt,
+          citations: finalCitations.map((c) => ({
+            doc_id: c.doc_id,
+            doc_title: c.title,
+            page: c.page,
+            excerpt: c.snippet,
+          })),
+        });
+        setMessages((m) => {
+          const copy = [...m];
+          copy[copy.length - 1] = { ...copy[copy.length - 1], trace_id: ragTraceId };
+          return copy;
+        });
       } else if (enableTools && (await pingOllama())) {
         // ============================================================
         // NATIVE FUNCTION-CALLING PATH (Gemma 4 + Ollama /api/chat tools)
@@ -566,6 +592,7 @@ export default function AIChat({
           return [...m, placeholderMsg];
         });
 
+        const toolsStartedAt = Date.now();
         try {
           const result = await chatWithTools(
             conversation,
@@ -589,11 +616,42 @@ export default function AIChat({
             status: 'pending' as const,
           }));
 
+          // Build the trace payload BEFORE updating React state so the
+          // model's exact inputs/outputs are captured atomically.
+          const traceReads: AiTraceToolRead[] = result.reads.map((ev) => ({
+            name: ev.name,
+            args: ev.args,
+            result_summary: toolResultForTrace(ev.result),
+            error: ev.error,
+          }));
+          const traceWrites: AiTraceToolWrite[] = result.writes.map((ev) => ({
+            name: ev.call.function.name,
+            args: parseToolArgs(ev.call),
+            description: describeToolCall(ev.call),
+            status: 'pending' as const,
+          }));
+          const traceId = await recordTrace({
+            source: family ? 'family_chat_scoped' : 'chat_tools',
+            language,
+            inputs_summary: `${reads.length} read tool(s), ${writes.length} write proposal(s)`,
+            system_prompt: sysContent,
+            user_input: trimmed,
+            tool_reads: traceReads,
+            tool_writes: traceWrites,
+            response_text: result.text,
+            duration_ms: Date.now() - toolsStartedAt,
+            metadata: {
+              scoped_family_id: freshFamily?.family_id,
+              truncated: result.truncated,
+            },
+          });
+
           setMessages((m) => {
             const copy = [...m];
             const idx = copy.length - 1; // last message is our placeholder
             copy[idx] = {
               ...copy[idx],
+              trace_id: traceId,
               content:
                 result.text ||
                 (writes.length > 0
@@ -628,9 +686,26 @@ export default function AIChat({
             [fallbackSys, ...modelConversation],
             { temperature: 0.5, maxTokens: 1024 }
           );
+          const fallbackTraceId = await recordTrace({
+            source: family ? 'family_chat_scoped' : 'chat_plain',
+            language,
+            inputs_summary: 'Tool calling failed — fell back to plain chat',
+            system_prompt: fallbackSys.content,
+            user_input: trimmed,
+            response_text: text,
+            fallback_used: true,
+            fallback_reason:
+              'Gemma build did not emit tool_calls or the transport errored. Plain-chat path used; the legacy fenced-action regex parser still runs over the response.',
+            duration_ms: Date.now() - toolsStartedAt,
+            error: e instanceof Error ? e.message : String(e),
+          });
           setMessages((m) => {
             const copy = [...m];
-            copy[copy.length - 1] = { ...copy[copy.length - 1], content: text };
+            copy[copy.length - 1] = {
+              ...copy[copy.length - 1],
+              content: text,
+              trace_id: fallbackTraceId,
+            };
             return copy;
           });
         }
@@ -656,6 +731,7 @@ export default function AIChat({
         console.debug('[AIChat] system prompt →', sysContent);
         const conversation = [sys, ...modelConversation];
         let buffer = '';
+        const plainStartedAt = Date.now();
         const placeholderMsg: ChatMessage = {
           role: 'assistant',
           content: '',
@@ -675,12 +751,31 @@ export default function AIChat({
         } catch (e) {
           console.warn('[AIChat] stream failed, falling back to non-streaming', e);
           const text = await chat(conversation, { temperature: 0.5, maxTokens: 1024 });
+          buffer = text;
           setMessages((m) => {
             const copy = [...m];
             copy[copy.length - 1] = { ...copy[copy.length - 1], content: text };
             return copy;
           });
         }
+        // Record trace + attach id to the assistant bubble.
+        const plainTraceId = await recordTrace({
+          source: family ? 'family_chat_scoped' : 'chat_plain',
+          language,
+          inputs_summary: family
+            ? `Family-scoped chat for ${family.family_id}`
+            : 'Plain chat (no tools, no RAG)',
+          system_prompt: sysContent,
+          user_input: trimmed,
+          response_text: buffer,
+          duration_ms: Date.now() - plainStartedAt,
+          metadata: family ? { scoped_family_id: family.family_id } : undefined,
+        });
+        setMessages((m) => {
+          const copy = [...m];
+          copy[copy.length - 1] = { ...copy[copy.length - 1], trace_id: plainTraceId };
+          return copy;
+        });
       }
     } catch (e) {
       console.error('[AIChat] failed', e);
@@ -973,8 +1068,11 @@ function Bubble({
         }`}
       >
         {!isUser && (
-          <div className="flex items-center gap-1.5 text-xs text-ai mb-1.5 font-medium">
-            <Sparkles size={12} /> AidFlow Assistant
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <div className="flex items-center gap-1.5 text-xs text-ai font-medium">
+              <Sparkles size={12} /> AidFlow Assistant
+            </div>
+            {m.trace_id && <TraceButton traceId={m.trace_id} />}
           </div>
         )}
         {!isUser && toolReads.length > 0 && (
