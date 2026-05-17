@@ -294,7 +294,7 @@ The combined system — coordinator console on the field laptop, capture app on 
 - **Hackathon:** [Gemma 4 Good Hackathon](https://kaggle.com/competitions/gemma-4-good-hackathon)
 - **Track:** Global Resilience (with secondary alignment to Safety & Trust — citation-grounded RAG, Apply/Discard before any write, raw-text verification on every extraction, **and a byte-level AI Audit Log: every Gemma 4 invocation writes a trace row capturing inputs / tool calls / citations / fallback usage / response, surfaced in a "How did I decide?" button next to each AI output and a browsable `/audit` page with JSON export**)
 - **Model:** Gemma 4 E4B served locally via Ollama at `http://localhost:11434`
-- **Gemma 4 features exercised:** native multimodal (paper-form vision ingest) and native function calling (11-tool catalog with read + write tools)
+- **Gemma 4 features exercised:** native multimodal (paper-form vision ingest + drone aerial-image planner), native function calling (11-tool catalog with read + write tools), multilingual generation (EN / AR / FR / ES), and citation-grounded RAG over uploaded PDFs
 - **Deliverables:** this repository (open source, MIT-licensed app code), a 3-minute demo video, a Kaggle Notebook write-up, this README
 
 ## 📜 License
