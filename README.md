@@ -112,7 +112,7 @@ Leave that terminal open. Open a new terminal for the next step.
 
 ```bash
 git clone https://github.com/Cyberman-HZ/Aidflow.git
-cd Aidflow
+cd Aidflow-main
 npm install
 cp .env.example .env.local   # optional — only needed to override defaults
 npm run dev
