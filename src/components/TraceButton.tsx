@@ -5,6 +5,12 @@
 // tools ran, what citations it used, whether the rule-engine fallback
 // took over, and the final response. Everything reads from the local
 // aiTraces table — pure provenance, never leaves the device.
+//
+// Discovery hint: until the user clicks ANY trace button (or dismisses
+// the bubble), the first visible button on screen shows a small floating
+// speech bubble pointing at it explaining the feature, plus a pulsing
+// notification dot. Dismissal is per-device (localStorage) so returning
+// users don't see it again.
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -24,7 +30,42 @@ import type { AiTrace } from '@/types';
 import { getTrace, sourceLabel, exportTraceAsJson } from '@/services/aiTrace';
 
 // =========================================================================
-// TraceButton — the inline "why?" affordance
+// Discovery hint state — module-level so only the FIRST TraceButton to
+// mount on a given page shows the bubble (avoids visual noise when an
+// assistant reply contains several outputs each with their own button).
+// =========================================================================
+
+const STORAGE_KEY = 'aidflow.trace_discovery_dismissed';
+
+/** True once the user has clicked any trace button or dismissed the bubble. */
+function getDiscoveryDismissed(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setDiscoveryDismissed() {
+  try {
+    localStorage.setItem(STORAGE_KEY, '1');
+  } catch {
+    /* private mode / quota — silently no-op, hint just stays visible */
+  }
+}
+
+// Per-page-load guard so only the first un-dismissed trace button claims
+// the bubble. Reset implicitly when the page reloads.
+let bubbleClaimedThisPage = false;
+// Subscribers so when one button dismisses, sibling buttons drop their
+// notification dots too. Tiny pub/sub avoids dragging in a store.
+const dismissSubscribers = new Set<() => void>();
+function notifyDismissed() {
+  for (const fn of dismissSubscribers) fn();
+}
+
+// =========================================================================
+// TraceButton — the inline "why?" affordance + discovery hint
 // =========================================================================
 
 export default function TraceButton({
@@ -38,19 +79,65 @@ export default function TraceButton({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  // Local mirror of the discovery state. We initialise from localStorage
+  // but ALSO subscribe to sibling-button dismissals so the dot disappears
+  // everywhere on first interaction.
+  const [dismissed, setDismissedLocal] = useState<boolean>(() => getDiscoveryDismissed());
+  const [showBubble, setShowBubble] = useState(false);
+
+  // Claim the bubble for this button if we're the first un-dismissed one
+  // on the page. Done in an effect so SSR / first-render is stable.
+  useEffect(() => {
+    if (!traceId) return;
+    if (!dismissed && !bubbleClaimedThisPage) {
+      bubbleClaimedThisPage = true;
+      setShowBubble(true);
+    }
+  }, [traceId, dismissed]);
+
+  // Sibling dismissals propagate via the pub/sub set.
+  useEffect(() => {
+    const onDismiss = () => {
+      setDismissedLocal(true);
+      setShowBubble(false);
+    };
+    dismissSubscribers.add(onDismiss);
+    return () => {
+      dismissSubscribers.delete(onDismiss);
+    };
+  }, []);
 
   if (!traceId) return null;
 
+  const dismissDiscovery = () => {
+    setDiscoveryDismissed();
+    setDismissedLocal(true);
+    setShowBubble(false);
+    notifyDismissed();
+  };
+
+  const onClick = () => {
+    // Opening the panel also counts as discovery — quietly dismiss.
+    if (!dismissed) dismissDiscovery();
+    setOpen(true);
+  };
+
   const cls =
     variant === 'badge'
-      ? 'inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border border-ai/30 text-ai bg-ai/10 hover:bg-ai/20'
-      : 'inline-flex items-center gap-1 text-[10px] text-slate-500 hover:text-ai italic';
+      ? 'inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border border-ai/30 text-ai bg-ai/10 hover:bg-ai/20 relative'
+      : 'inline-flex items-center gap-1 text-[10px] text-slate-500 hover:text-ai italic relative';
+
+  // When undiscovered, swap the muted "why?" for a clearer call-to-action
+  // and bump the visual emphasis. After dismissal, the button returns to
+  // its quiet default so it doesn't compete with normal content.
+  const displayLabel =
+    label ?? (dismissed ? t('trace.button', 'why?') : t('trace.button_new', 'How did I decide?'));
 
   return (
-    <>
+    <span className="relative inline-flex">
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={onClick}
         title={t(
           'trace.tooltip',
           'Trace — show what data the AI saw and how it responded'
@@ -58,10 +145,72 @@ export default function TraceButton({
         className={cls}
       >
         <Info size={11} />
-        {label ?? t('trace.button', 'why?')}
+        {displayLabel}
+        {/* Pulsing notification dot — only while undiscovered. */}
+        {!dismissed && (
+          <span className="absolute -top-0.5 -right-0.5 inline-flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-ai opacity-75 animate-ping" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-ai" />
+          </span>
+        )}
       </button>
+
+      {showBubble && !dismissed && <DiscoveryBubble onDismiss={dismissDiscovery} />}
       {open && <TracePanel traceId={traceId} onClose={() => setOpen(false)} />}
-    </>
+    </span>
+  );
+}
+
+// =========================================================================
+// DiscoveryBubble — floating speech bubble pointing at the trace button
+// =========================================================================
+
+function DiscoveryBubble({ onDismiss }: { onDismiss: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="dialog"
+      aria-label={t('trace.discovery_title', 'Explainable AI — new feature')}
+      className="absolute top-full mt-2 right-0 z-30 w-64"
+    >
+      {/* Arrow pointing back up to the button. Built from a rotated square
+          so it inherits the bubble's border + background colour. */}
+      <span
+        aria-hidden
+        className="absolute -top-1.5 right-4 w-3 h-3 bg-ai border-l border-t border-ai rotate-45"
+      />
+      <div className="relative bg-ai text-white rounded-lg shadow-2xl shadow-ai/30 p-3 text-xs">
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={t('trace.discovery_dismiss', 'Dismiss')}
+          className="absolute top-1.5 right-1.5 text-white/70 hover:text-white p-0.5"
+        >
+          <X size={12} />
+        </button>
+        <div className="flex items-start gap-2 pr-4">
+          <Sparkles size={14} className="flex-shrink-0 mt-0.5" />
+          <div className="flex-1 leading-snug">
+            <div className="font-semibold mb-1">
+              {t('trace.discovery_title', 'New — explainable AI')}
+            </div>
+            <p className="text-white/90">
+              {t(
+                'trace.discovery_body',
+                'Click to see the exact data, tools, and citations behind every AI output. Everything stays on your device.'
+              )}
+            </p>
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="mt-2 text-[10px] uppercase tracking-wider font-semibold underline hover:no-underline"
+            >
+              {t('trace.discovery_got_it', 'Got it')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
