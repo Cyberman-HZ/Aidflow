@@ -128,10 +128,10 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
-// 2. v11 Dexie migration
+// 2. Dexie migrations
 // ---------------------------------------------------------------------------
 
-header('2. Dexie v11 migration');
+header('2. Dexie v11 + v12 migrations');
 
 const dbSrc = read('src/db/database.ts');
 
@@ -139,6 +139,16 @@ assert(
   /this\.version\(11\)\.stores\(\{[\s\S]*campMaps:\s*'id, uploaded_at'/.test(dbSrc),
   'version(11) registers campMaps with id + uploaded_at indexes',
   "expected `campMaps: 'id, uploaded_at'`"
+);
+assert(
+  /this\.version\(12\)/.test(dbSrc),
+  'version(12) bump for multi-snapshot time-series exists',
+  'singleton-to-history migration must happen on a new Dexie version'
+);
+assert(
+  /version\(12\)[\s\S]*?\.upgrade\([\s\S]*?\.get\('current'\)[\s\S]*?snap-/.test(dbSrc),
+  "v12 upgrade renames the legacy 'current' singleton row to a snap-{epoch} id",
+  'without this, the old singleton row would be orphaned in the history view'
 );
 assert(
   /campMaps!:\s*Table<CampMap,\s*string>/.test(dbSrc),
@@ -161,11 +171,20 @@ const expectedExports = [
   'analyzeAndStoreImage',
   'extractCampFeaturesFromImage',
   'parseAndSanitize',
+  'listCampMaps',
+  'getCampMap',
+  'getLatestCampMap',
   'getCurrentCampMap',
+  'deleteCampMap',
+  'clearAllCampMaps',
   'clearCurrentCampMap',
   'setHazardZones',
   'setFamilyPins',
   'setAvgHouseholdSize',
+  'setFeatures',
+  'nextFeatureId',
+  'confidenceWeight',
+  'diffSnapshots',
   'tentsOf',
   'waterPointsOf',
   'latrinesOf',
@@ -192,6 +211,13 @@ for (const fn of expectedExports) {
   );
 }
 
+// FEATURE_DEDUPE_THRESHOLD exposed as a const (used implicitly by the
+// dedupe pass; exporting it makes the threshold a contract).
+assert(
+  /export const FEATURE_DEDUPE_THRESHOLD/.test(svc),
+  'campMap exports FEATURE_DEDUPE_THRESHOLD constant'
+);
+
 // parseAndSanitize must never throw on bad input
 assert(
   /try \{[\s\S]*?JSON\.parse[\s\S]*?\} catch \{[\s\S]*?return \{ features: \[\][\s\S]*?\}/m.test(svc),
@@ -199,10 +225,55 @@ assert(
   'a bad model response must NEVER throw — image upload would dead-end'
 );
 
+// parseAndSanitize must dedupe near-coincident features of the same type
+assert(
+  /FEATURE_DEDUPE_THRESHOLD/.test(svc) && /Math\.hypot/.test(svc),
+  'parseAndSanitize uses Math.hypot against FEATURE_DEDUPE_THRESHOLD to drop near-duplicate features',
+  'the model often emits the same physical tent at slightly different coords'
+);
+
+// Vision prompt must teach the coordinate convention + give a worked example
+assert(
+  /TOP-LEFT/i.test(svc) && /y grows DOWNWARD/i.test(svc),
+  'SYSTEM_PROMPT explicitly teaches top-left origin and downward y axis',
+  'vision models routinely flip y when origin is implicit'
+);
+assert(
+  /WORKED EXAMPLE/i.test(svc),
+  'SYSTEM_PROMPT includes a worked JSON example',
+  'few-shot lifts schema adherence on this size of model'
+);
+
+// Vision call uses temperature 0 (deterministic — schema is strict)
+assert(
+  /temperature:\s*0\b/.test(svc),
+  'extractCampFeaturesFromImage calls chatWithImage with temperature: 0'
+);
+
+// Resize cap raised from 1280 to 1600 to give the model more pixels per tent
+assert(
+  /maxDim:\s*1600\b/.test(svc),
+  'analyzeAndStoreImage resizes the image to maxDim 1600 (was 1280)'
+);
+
 // analyzeAndStoreImage must call recordTrace with camp_map source
 assert(
   /source:\s*['"]camp_map['"]/.test(svc),
   "analyzeAndStoreImage records a trace with source: 'camp_map'"
+);
+
+// estimatePopulation now returns tents_raw alongside tents (confidence-weighted)
+assert(
+  /tents_raw:/.test(svc),
+  'estimatePopulation returns a tents_raw count alongside the confidence-weighted tents number',
+  'UI needs both: raw count for "tents visible" and weighted for the population math'
+);
+
+// setFeatures must prune dangling family pins so insights don't break
+assert(
+  /family_pins\s*=\s*row\.family_pins\.filter[\s\S]*?validIds\.has/.test(svc),
+  'setFeatures prunes family_pins whose feature_id no longer exists',
+  'deleting a feature in Edit mode would otherwise leave dangling pins'
 );
 
 // Sphere constants
@@ -254,6 +325,192 @@ try {
   // warning so the developer knows to update the sanity checks.
   console.log('  ⚠ pointInPolygon sanity skipped:', e.message);
 }
+
+// ---------------------------------------------------------------------------
+// 4a. Time-series snapshot contract
+// ---------------------------------------------------------------------------
+
+header('4a. Time-series snapshots + diff');
+
+// All mutators must take a snapshot id first — the singleton 'current' is gone
+for (const fn of ['setHazardZones', 'setFamilyPins', 'setAvgHouseholdSize', 'setFeatures']) {
+  assert(
+    new RegExp(`export async function ${fn}\\(\\s*snapshotIdToPatch:\\s*string`).test(svc),
+    `${fn} takes a snapshot id as its first argument`,
+    'caller must be explicit about which snapshot to mutate'
+  );
+}
+
+// SnapshotDiff shape + diffSnapshots return contract
+assert(
+  /export interface SnapshotDiff \{[\s\S]*?kept:[\s\S]*?moved:[\s\S]*?added:[\s\S]*?removed:[\s\S]*?span_days:/.test(svc),
+  'SnapshotDiff interface declares kept/moved/added/removed/span_days'
+);
+assert(
+  /export function diffSnapshots\([\s\S]*?active: CampMap[\s\S]*?compare: CampMap/.test(svc),
+  'diffSnapshots takes (active, compare) CampMap arguments'
+);
+assert(
+  /DIFF_MATCH_THRESHOLD/.test(svc) && /DIFF_MOVE_THRESHOLD/.test(svc),
+  'DIFF_MATCH_THRESHOLD + DIFF_MOVE_THRESHOLD exported as constants',
+  'thresholds are part of the contract so geometry tweaks are visible'
+);
+
+// New uploads use snap-{epoch} ids (not the legacy 'current')
+assert(
+  /snapshotId\(now\)/.test(svc) || /`snap-\$\{/.test(svc),
+  'analyzeAndStoreImage stores uploads under a snap-{epoch} id',
+  'singleton "current" id is forbidden post-v12'
+);
+
+// Live diffSnapshots sanity check — run a hand-written JS port of the
+// algorithm so we don't have to TS-strip the source. The port mirrors
+// the service body line-for-line; if the algorithm diverges this test
+// won't catch the regression, but the static contract checks above will
+// catch any shape changes.
+{
+  function diffFn(active, compare) {
+    const MATCH = 0.02;
+    const MOVE = 0.005;
+    const at = active.features.filter(
+      (f) => f.type === 'tent' && typeof f.x === 'number' && typeof f.y === 'number'
+    );
+    const bt = compare.features.filter(
+      (f) => f.type === 'tent' && typeof f.x === 'number' && typeof f.y === 'number'
+    );
+    const used = new Set();
+    const kept = [];
+    const moved = [];
+    const added = [];
+    for (const a of at) {
+      let bestIdx = -1;
+      let bestDist = Infinity;
+      for (let i = 0; i < bt.length; i++) {
+        if (used.has(i)) continue;
+        const b = bt[i];
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+      if (bestIdx >= 0 && bestDist < MATCH) {
+        used.add(bestIdx);
+        const match = { a, b: bt[bestIdx], distance: bestDist };
+        if (bestDist < MOVE) kept.push(match);
+        else moved.push(match);
+      } else {
+        added.push(a);
+      }
+    }
+    const removed = bt.filter((_, i) => !used.has(i));
+    const span_ms =
+      new Date(active.uploaded_at).getTime() - new Date(compare.uploaded_at).getTime();
+    const span_days = Math.max(0, Math.round(span_ms / 86_400_000));
+    return { kept, moved, added, removed, span_days };
+  }
+  const active = {
+    features: [
+      { id: 'tent-1', type: 'tent', x: 0.1, y: 0.1 },
+      { id: 'tent-2', type: 'tent', x: 0.5, y: 0.5 },
+      { id: 'tent-3', type: 'tent', x: 0.9, y: 0.9 },
+    ],
+    uploaded_at: '2026-05-17T00:00:00Z',
+  };
+  const compare = {
+    features: [
+      { id: 'tent-A', type: 'tent', x: 0.1, y: 0.1 },
+      { id: 'tent-B', type: 'tent', x: 0.51, y: 0.51 },
+      { id: 'tent-C', type: 'tent', x: 0.2, y: 0.8 },
+    ],
+    uploaded_at: '2026-05-10T00:00:00Z',
+  };
+  const r = diffFn(active, compare);
+  assert(r.added.length === 1, 'diffSnapshots: 1 added tent (brand-new at 0.9,0.9)');
+  assert(r.removed.length === 1, 'diffSnapshots: 1 removed tent (gone at 0.2,0.8)');
+  assert(r.kept.length === 1, 'diffSnapshots: 1 kept tent (perfect match at 0.1,0.1)');
+  assert(r.moved.length === 1, 'diffSnapshots: 1 moved tent (within MATCH, beyond MOVE)');
+  assert(r.span_days === 7, 'diffSnapshots: span_days = 7');
+}
+
+// Page + insights wire the diff through
+const pageForDiff = read('src/pages/CampMap.tsx');
+assert(
+  /diffSnapshots\(campMap,\s*compareMap\)/.test(pageForDiff),
+  'CampMap page invokes diffSnapshots(active, compare)'
+);
+assert(
+  /listCampMaps\(\)/.test(pageForDiff),
+  'CampMap page calls listCampMaps for the snapshot picker'
+);
+assert(
+  /setActiveId/.test(pageForDiff) && /setCompareId/.test(pageForDiff),
+  'CampMap page maintains activeId + compareId state'
+);
+
+const insightsForDiff = read('src/components/CampMapInsights.tsx');
+assert(
+  /compareMap:\s*CampMap \| null/.test(insightsForDiff),
+  'Insights Props declares compareMap: CampMap | null'
+);
+assert(
+  /diff:\s*SnapshotDiff \| null/.test(insightsForDiff),
+  'Insights Props declares diff: SnapshotDiff | null'
+);
+
+const canvasForDiff = read('src/components/CampMapCanvas.tsx');
+assert(
+  /diff\?:\s*SnapshotDiff \| null/.test(canvasForDiff),
+  'Canvas Props declares optional diff: SnapshotDiff | null'
+);
+assert(
+  /diff\?\.removed\.map/.test(canvasForDiff),
+  'Canvas renders the removed-tent ghosts when diff is present'
+);
+assert(
+  /diff\?\.moved\.map/.test(canvasForDiff),
+  'Canvas renders the moved-tent arrows when diff is present'
+);
+
+// ---------------------------------------------------------------------------
+// 4b. Edit mode wiring (canvas + page)
+// ---------------------------------------------------------------------------
+
+header('4b. Edit mode (admin-correction UI)');
+
+const canvasSrc = read('src/components/CampMapCanvas.tsx');
+assert(
+  /export type CanvasMode = [^;]*'edit'/.test(canvasSrc),
+  "CanvasMode union includes 'edit'",
+  'page would not be able to enter edit mode otherwise'
+);
+assert(
+  /export type EditBrushType/.test(canvasSrc),
+  'EditBrushType exported from canvas',
+  'page typecheck would fail without this'
+);
+assert(
+  /onAddFeature\s*:[\s\S]*?onDeleteFeature\s*:/.test(canvasSrc),
+  'Canvas Props declares onAddFeature + onDeleteFeature callbacks'
+);
+assert(
+  /mode === 'edit'/.test(canvasSrc),
+  "Canvas branches on mode === 'edit'"
+);
+
+const pageSrc = read('src/pages/CampMap.tsx');
+assert(
+  /const onAddFeature\s*=/.test(pageSrc) && /const onDeleteFeature\s*=/.test(pageSrc),
+  'CampMap page implements onAddFeature + onDeleteFeature handlers'
+);
+assert(
+  /setFeatures\(/.test(pageSrc) && /nextFeatureId\(/.test(pageSrc),
+  'CampMap page calls setFeatures + nextFeatureId to persist edits'
+);
+assert(
+  /onAddFeature=\{onAddFeature\}/.test(pageSrc) && /onDeleteFeature=\{onDeleteFeature\}/.test(pageSrc),
+  'CampMap page passes the edit handlers down to the canvas'
+);
 
 // ---------------------------------------------------------------------------
 // 5. /camp-map route + nav + locale

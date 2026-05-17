@@ -222,11 +222,29 @@ export class AidFlowDB extends Dexie {
     //       with Gemma 4 vision output (tents, water points, latrines,
     //       paths, open areas, buildings, vehicles), admin-painted hazard
     //       polygons (flood-risk zones), and family-to-tent pins. MVP
-    //       stores a single 'current' singleton; future versions can keep
-    //       a time-series for diff views.
+    //       stored a single 'current' singleton.
     this.version(11).stores({
       campMaps: 'id, uploaded_at',
     });
+
+    // v12 — Time-series snapshots for the Drone Camp Planner. The schema
+    //       indexes don't change; what changes is the semantics: every
+    //       upload becomes its own row keyed `snap-{epoch}` instead of
+    //       overwriting a singleton. Migrate the legacy 'current' row to
+    //       a timestamped id so it joins the history seamlessly.
+    this.version(12)
+      .stores({ campMaps: 'id, uploaded_at' })
+      .upgrade(async (tx) => {
+        const t = tx.table('campMaps');
+        const legacy = (await t.get('current')) as CampMap | undefined;
+        if (!legacy) return;
+        const epoch = legacy.uploaded_at
+          ? new Date(legacy.uploaded_at).getTime()
+          : Date.now();
+        const newId = `snap-${epoch}`;
+        await t.delete('current');
+        await t.put({ ...legacy, id: newId });
+      });
   }
 
   /**

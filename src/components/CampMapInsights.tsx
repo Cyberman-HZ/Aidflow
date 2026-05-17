@@ -19,6 +19,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Info,
+  TrendingUp,
 } from 'lucide-react';
 import type { AidDistribution, CampMap, Family } from '@/types';
 import {
@@ -33,10 +34,14 @@ import {
   openAreasOf,
   pathsOf,
   buildingsOf,
+  type SnapshotDiff,
 } from '@/services/campMap';
 
 interface Props {
   campMap: CampMap;
+  /** Older snapshot we're diffing against, or null if no comparison is on. */
+  compareMap: CampMap | null;
+  diff: SnapshotDiff | null;
   families: Family[];
   history: AidDistribution[];
   showSuggestions: boolean;
@@ -46,6 +51,8 @@ interface Props {
 
 export default function CampMapInsights({
   campMap,
+  compareMap,
+  diff,
   families,
   history,
   showSuggestions,
@@ -95,6 +102,16 @@ export default function CampMapInsights({
   const pathCount = pathsOf(campMap.features).length;
   const buildingCount = buildingsOf(campMap.features).length;
 
+  // Snapshot-comparison numbers — only meaningful when diff != null
+  const comparePop = useMemo(
+    () => (compareMap ? estimatePopulation(compareMap.features, avg) : null),
+    [compareMap, avg]
+  );
+  const deltaPop = comparePop ? pop.population - comparePop.population : 0;
+  const deltaTents = comparePop ? pop.tents_raw - comparePop.tents_raw : 0;
+  const tentsPerDay =
+    diff && diff.span_days > 0 ? (deltaTents / diff.span_days).toFixed(2) : null;
+
   return (
     <aside className="space-y-3">
       {/* Suggestions toggle (drives the canvas star markers) */}
@@ -110,6 +127,94 @@ export default function CampMapInsights({
         </label>
       </div>
 
+      {/* Snapshot comparison summary — only present when a compare map is set */}
+      {diff && compareMap && (
+        <Card
+          icon={<TrendingUp size={14} className="text-ai" />}
+          title={t('camp_map.card_diff', 'Snapshot comparison')}
+          body={
+            <div className="space-y-1.5 text-xs text-slate-300">
+              <p className="text-[10px] text-slate-500">
+                {t('camp_map.diff_span', '{{n}} day(s) between snapshots.', {
+                  n: diff.span_days,
+                })}
+              </p>
+              <ul className="space-y-1">
+                <li className="flex items-center gap-1.5">
+                  <span className="inline-block w-2 h-2 rounded-full bg-priority-normal" />
+                  <span>
+                    {diff.added.length} {t('camp_map.diff_added', 'new tent(s)')}
+                  </span>
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <span className="inline-block w-2 h-2 rounded-full bg-priority-critical" />
+                  <span>
+                    {diff.removed.length} {t('camp_map.diff_removed', 'gone since')}
+                  </span>
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <span className="inline-block w-2 h-2 rounded-full bg-amber-300" />
+                  <span>
+                    {diff.moved.length} {t('camp_map.diff_moved', 'moved')}
+                  </span>
+                </li>
+                <li className="flex items-center gap-1.5 text-slate-400">
+                  <span className="inline-block w-2 h-2 rounded-full bg-slate-500" />
+                  <span>
+                    {diff.kept.length} {t('camp_map.diff_kept', 'unchanged')}
+                  </span>
+                </li>
+              </ul>
+              <p className="text-[11px] text-slate-300 pt-1 border-t border-slate-700">
+                {t('camp_map.diff_delta_tents', 'Δ tents')}:{' '}
+                <span
+                  className={
+                    deltaTents > 0
+                      ? 'text-priority-normal font-semibold'
+                      : deltaTents < 0
+                      ? 'text-priority-critical font-semibold'
+                      : 'text-slate-400'
+                  }
+                >
+                  {deltaTents > 0 ? '+' : ''}
+                  {deltaTents}
+                </span>
+                {' · '}
+                {t('camp_map.diff_delta_pop', 'Δ pop')}:{' '}
+                <span
+                  className={
+                    deltaPop > 0
+                      ? 'text-priority-normal font-semibold'
+                      : deltaPop < 0
+                      ? 'text-priority-critical font-semibold'
+                      : 'text-slate-400'
+                  }
+                >
+                  {deltaPop > 0 ? '+' : ''}
+                  {deltaPop.toLocaleString()}
+                </span>
+                {tentsPerDay !== null && (
+                  <>
+                    {' · '}
+                    {t('camp_map.diff_rate', '{{rate}} tents/day', { rate: tentsPerDay })}
+                  </>
+                )}
+              </p>
+              <p className="text-[10px] text-slate-500">
+                {t(
+                  'camp_map.diff_baseline',
+                  'Baseline: {{date}} ({{count}} tent(s))',
+                  {
+                    date: new Date(compareMap.uploaded_at).toLocaleDateString(),
+                    count: comparePop?.tents_raw ?? 0,
+                  }
+                )}
+              </p>
+            </div>
+          }
+        />
+      )}
+
       {/* Task 1 — Population estimate */}
       <Card
         icon={<Users size={14} className="text-ai" />}
@@ -118,7 +223,7 @@ export default function CampMapInsights({
           <>
             <Big>{pop.population.toLocaleString()}</Big>
             <p className="text-xs text-slate-400">
-              {pop.tents.toLocaleString()}{' '}
+              {pop.tents_raw.toLocaleString()}{' '}
               {t('camp_map.tents_visible', 'tents visible')} ×{' '}
               <label className="inline-flex items-center gap-1">
                 <input
@@ -133,6 +238,15 @@ export default function CampMapInsights({
               </label>
               .
             </p>
+            {pop.tents_raw !== pop.tents && (
+              <p className="text-[10px] text-slate-500 mt-1">
+                {t(
+                  'camp_map.tents_weighted_note',
+                  'Counted as {{n}} after confidence weighting (low-confidence tents at 0.4×).',
+                  { n: pop.tents }
+                )}
+              </p>
+            )}
           </>
         }
       />

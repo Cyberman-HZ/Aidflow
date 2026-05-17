@@ -36,10 +36,32 @@ import { recordTrace } from '@/services/aiTrace';
 // Constants
 // ---------------------------------------------------------------------------
 
-const SINGLETON_ID = 'current';
+/**
+ * New uploads use `snap-${epoch}` as their primary key so the table
+ * naturally orders by upload time and any pre-v12 'current' singleton
+ * has already been migrated into the same id shape.
+ */
+function snapshotId(d: Date): string {
+  return `snap-${d.getTime()}`;
+}
 
 /** Default assumption when computing population from tent count. */
 export const DEFAULT_AVG_HOUSEHOLD_SIZE = 5;
+
+/**
+ * Minimum normalized distance two tents can be apart before the diff
+ * routine considers them DIFFERENT tents (rather than one tent that has
+ * moved slightly). 0.02 ≈ 2% of the image's long edge — generous enough
+ * for drone-image registration jitter, tight enough not to fuse genuinely
+ * separate tents in dense camps.
+ */
+export const DIFF_MATCH_THRESHOLD = 0.02;
+
+/**
+ * Below this distance, a matched tent is considered "kept" (essentially
+ * unchanged); between this and DIFF_MATCH_THRESHOLD it is "moved".
+ */
+export const DIFF_MOVE_THRESHOLD = 0.005;
 
 /**
  * Sphere humanitarian standards — minimum acceptable ratios. Used by the
@@ -75,7 +97,16 @@ const CONFIDENCE_VALUES: readonly CampFeatureConfidence[] = ['high', 'medium', '
 
 const SYSTEM_PROMPT = `You are a humanitarian field analyst reviewing a top-down aerial image of a displaced-persons settlement, refugee camp, or temporary shelter site.
 
-Identify visible features. Return STRICT JSON matching the schema below. Use NORMALIZED coordinates in [0, 1]: x is the fraction from the left edge, y is the fraction from the top edge. (0.5, 0.5) is the centre of the image.
+Identify visible features. Return STRICT JSON matching the schema below.
+
+COORDINATE SYSTEM — read carefully:
+- The image origin (0, 0) is the TOP-LEFT corner.
+- x grows to the RIGHT, from 0 (left edge) to 1 (right edge).
+- y grows DOWNWARD, from 0 (top edge) to 1 (bottom edge).
+- (0.5, 0.5) is the geometric centre of the image.
+- A tent in the upper-left quadrant has x<0.5 AND y<0.5.
+- A tent in the lower-right quadrant has x>0.5 AND y>0.5.
+- Coordinates are NORMALIZED fractions, not pixels. Always 4-decimal numbers.
 
 SCHEMA:
 {
@@ -91,17 +122,29 @@ SCHEMA:
   "notes": ["short observation 1", "short observation 2"]
 }
 
+WORKED EXAMPLE — for an image with two tents in the upper-left and a water tank centred at the bottom:
+{
+  "features": [
+    {"type": "tent",        "x": 0.18, "y": 0.22, "confidence": "high"},
+    {"type": "tent",        "x": 0.27, "y": 0.31, "confidence": "high"},
+    {"type": "water_point", "x": 0.50, "y": 0.88, "confidence": "medium"}
+  ],
+  "notes": ["Dense tent cluster in upper left", "One visible water tank at southern edge"]
+}
+
 RULES:
-1. Tents include any small temporary shelter (tent, tarp, prefab cabin, makeshift dwelling).
+1. Tents include any small temporary shelter (tent, tarp, prefab cabin, makeshift dwelling). Each tent is ONE entry — never lump a cluster into one point.
 2. Water points include taps, water tanks, wells, distribution stations, water tankers.
 3. Latrines include any structure that looks like a sanitation unit; if unsure mark confidence=low.
 4. Buildings are larger / permanent-looking structures. Use the label to guess function from visual cues (cross/red-crescent → medical, large rectangular → warehouse, central pavilion → community).
 5. Open areas are unoccupied spaces large enough for distributions, evacuations, or future shelter — represent them as a closed polygon of 3-8 points.
 6. Paths are visible roads, tracks, or footpaths between clusters — represent as a polyline of 2-10 points.
 7. Vehicles are cars, trucks, or buses visible in the image.
-8. NEVER invent features you can't see. NEVER guess a tent that's not visually present. Quality > quantity.
-9. Cap tents at 200, other types at 50 each.
-10. Output ONLY the JSON. No markdown fences, no prose, no preamble.`;
+8. NEVER invent features you can't see. NEVER guess a tent that's not visually present. Quality > quantity. Prefer fewer, well-placed, high-confidence features over many speculative ones.
+9. NEVER list the same physical object twice. If a tent could plausibly be at (0.31, 0.42) or (0.32, 0.43), pick ONE.
+10. Use confidence honestly: "high" only when the feature is unambiguous and clearly visible; "medium" when likely but partially obscured; "low" when you are guessing — the system will down-weight low-confidence entries automatically.
+11. Cap tents at 200, other point-features at 50 each.
+12. Output ONLY the JSON. No markdown fences, no prose, no preamble.`;
 
 interface ExtractionResult {
   features: CampFeature[];
@@ -138,15 +181,16 @@ export async function extractCampFeaturesFromImage(
       { role: 'user', content: userPrompt },
     ],
     [imageBase64],
-    { temperature: 0.2, maxTokens: 4096, jsonMode: true }
+    { temperature: 0, maxTokens: 4096, jsonMode: true }
   );
   return parseAndSanitize(raw);
 }
 
 /**
  * Defensive parser. Strips fences, slices to the outermost {...}, drops
- * malformed entries, clamps coordinates into [0,1]. The whole point is to
- * NEVER throw on an imperfect model response — return whatever's valid.
+ * malformed entries, clamps coordinates into [0,1], and dedupes near-
+ * duplicate point features so the model can't inflate counts by emitting
+ * the same tent twice. NEVER throws on bad model output.
  */
 export function parseAndSanitize(raw: string): ExtractionResult {
   const cleaned = raw
@@ -167,11 +211,31 @@ export function parseAndSanitize(raw: string): ExtractionResult {
   }
   const obj = parsed as Record<string, unknown>;
   const rawFeatures = Array.isArray(obj.features) ? obj.features : [];
-  const features: CampFeature[] = [];
+  const accepted: CampFeature[] = [];
   const counters: Record<string, number> = {};
   for (const f of rawFeatures) {
     const sf = sanitizeFeature(f, counters);
-    if (sf) features.push(sf);
+    if (!sf) continue;
+    // Dedupe: drop a point feature that's effectively at the same spot
+    // as another already-accepted feature of the same type. Threshold of
+    // 0.012 (≈1.2% of image width) is tight enough to keep distinct tents
+    // separate while collapsing the model's "two coords for one object"
+    // failure mode.
+    if (typeof sf.x === 'number' && typeof sf.y === 'number') {
+      const dup = accepted.find(
+        (a) =>
+          a.type === sf.type &&
+          typeof a.x === 'number' &&
+          typeof a.y === 'number' &&
+          Math.hypot((a.x as number) - sf.x!, (a.y as number) - sf.y!) < FEATURE_DEDUPE_THRESHOLD
+      );
+      if (dup) {
+        // Re-rolled feature index because the new one is discarded.
+        counters[sf.type] = Math.max(0, (counters[sf.type] ?? 1) - 1);
+        continue;
+      }
+    }
+    accepted.push(sf);
   }
   const notes = Array.isArray(obj.notes)
     ? obj.notes
@@ -179,8 +243,15 @@ export function parseAndSanitize(raw: string): ExtractionResult {
         .filter((n) => !!n)
         .slice(0, 8)
     : [];
-  return { features, notes };
+  return { features: accepted, notes };
 }
+
+/**
+ * Minimum normalized distance two point features of the same type must be
+ * apart before we consider them distinct. ≈1.2% of the image's long edge.
+ * Exposed for the QA test.
+ */
+export const FEATURE_DEDUPE_THRESHOLD = 0.012;
 
 function sanitizeFeature(raw: unknown, counters: Record<string, number>): CampFeature | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -269,7 +340,9 @@ export async function analyzeAndStoreImage(
   opts: AnalyzeAndStoreOpts
 ): Promise<AnalyzeAndStoreResult> {
   const startedAt = Date.now();
-  const resized = await fileToResizedJpegBase64(file, { maxDim: 1280, quality: 0.82 });
+  // 1600 px gives Gemma 4 ~25% more pixels per tent than 1280 — measurable
+  // accuracy gain on dense camps. Costs ~1 s of extra inference per image.
+  const resized = await fileToResizedJpegBase64(file, { maxDim: 1600, quality: 0.85 });
   // The Blob we store is reconstructed from the resized base64 so we don't
   // keep a 30 MB original around. ~500 KB is plenty for the canvas.
   const imageBlob = base64ToBlob(resized.base64, 'image/jpeg');
@@ -285,13 +358,14 @@ export async function analyzeAndStoreImage(
     error = e instanceof Error ? e.message : String(e);
   }
 
+  const now = new Date();
   const row: CampMap = {
-    id: SINGLETON_ID,
+    id: snapshotId(now),
     image: imageBlob,
     image_mime: 'image/jpeg',
     image_width: resized.width,
     image_height: resized.height,
-    uploaded_at: new Date().toISOString(),
+    uploaded_at: now.toISOString(),
     uploaded_by: opts.uploaded_by,
     source_kind: opts.source_kind,
     features,
@@ -339,37 +413,116 @@ function approxKb(b64: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// Reads
+// Reads — time-series friendly
 // ---------------------------------------------------------------------------
 
+/** Return every stored snapshot, newest first. */
+export async function listCampMaps(): Promise<CampMap[]> {
+  return await db.campMaps.orderBy('uploaded_at').reverse().toArray();
+}
+
+/** Fetch one snapshot by id. Returns undefined if it has been deleted. */
+export async function getCampMap(id: string): Promise<CampMap | undefined> {
+  return await db.campMaps.get(id);
+}
+
+/** The most recently uploaded snapshot, if any. */
+export async function getLatestCampMap(): Promise<CampMap | undefined> {
+  return await db.campMaps.orderBy('uploaded_at').reverse().first();
+}
+
+/**
+ * Back-compat: kept as an alias of getLatestCampMap so legacy callers keep
+ * working. The "current" terminology is misleading post-v12; new code
+ * should call getLatestCampMap or getCampMap(id) directly.
+ */
 export async function getCurrentCampMap(): Promise<CampMap | undefined> {
-  return await db.campMaps.get(SINGLETON_ID);
+  return await getLatestCampMap();
 }
 
+/** Delete a single snapshot. Other snapshots are untouched. */
+export async function deleteCampMap(id: string): Promise<void> {
+  await db.campMaps.delete(id);
+}
+
+/** Wipe ALL stored snapshots (the "clear map" button when history is on). */
+export async function clearAllCampMaps(): Promise<void> {
+  await db.campMaps.clear();
+}
+
+/** Back-compat: deletes only the most recent snapshot. */
 export async function clearCurrentCampMap(): Promise<void> {
-  await db.campMaps.delete(SINGLETON_ID);
+  const latest = await getLatestCampMap();
+  if (latest) await db.campMaps.delete(latest.id);
 }
 
 // ---------------------------------------------------------------------------
-// Mutations — patching pins and hazard zones on the current CampMap
+// Mutations — every mutator now targets a specific snapshot id
 // ---------------------------------------------------------------------------
 
-export async function setHazardZones(zones: CampHazardZone[]): Promise<void> {
-  const row = await getCurrentCampMap();
+export async function setHazardZones(
+  snapshotIdToPatch: string,
+  zones: CampHazardZone[]
+): Promise<void> {
+  const row = await getCampMap(snapshotIdToPatch);
   if (!row) return;
-  await db.campMaps.update(SINGLETON_ID, { hazard_zones: zones });
+  await db.campMaps.update(snapshotIdToPatch, { hazard_zones: zones });
 }
 
-export async function setFamilyPins(pins: CampFamilyPin[]): Promise<void> {
-  const row = await getCurrentCampMap();
+export async function setFamilyPins(
+  snapshotIdToPatch: string,
+  pins: CampFamilyPin[]
+): Promise<void> {
+  const row = await getCampMap(snapshotIdToPatch);
   if (!row) return;
-  await db.campMaps.update(SINGLETON_ID, { family_pins: pins });
+  await db.campMaps.update(snapshotIdToPatch, { family_pins: pins });
 }
 
-export async function setAvgHouseholdSize(n: number): Promise<void> {
-  const row = await getCurrentCampMap();
+export async function setAvgHouseholdSize(
+  snapshotIdToPatch: string,
+  n: number
+): Promise<void> {
+  const row = await getCampMap(snapshotIdToPatch);
   if (!row) return;
-  await db.campMaps.update(SINGLETON_ID, { avg_household_size: Math.max(1, Math.floor(n)) });
+  await db.campMaps.update(snapshotIdToPatch, {
+    avg_household_size: Math.max(1, Math.floor(n)),
+  });
+}
+
+/**
+ * Replace the feature list on a snapshot. Used by the canvas Edit mode
+ * (add / remove / move point features). Also prunes any family pins whose
+ * target feature has been removed, so insights don't end up looking at
+ * dangling references.
+ */
+export async function setFeatures(
+  snapshotIdToPatch: string,
+  features: CampFeature[]
+): Promise<void> {
+  const row = await getCampMap(snapshotIdToPatch);
+  if (!row) return;
+  const validIds = new Set(features.map((f) => f.id));
+  const family_pins = row.family_pins.filter((p) => validIds.has(p.feature_id));
+  await db.campMaps.update(snapshotIdToPatch, { features, family_pins });
+}
+
+/** Next stable id for a freshly added feature of the given type. */
+export function nextFeatureId(existing: CampFeature[], type: CampFeatureType): string {
+  let max = 0;
+  const prefix = `${type}-`;
+  for (const f of existing) {
+    if (f.type !== type) continue;
+    const tail = f.id.startsWith(prefix) ? Number(f.id.slice(prefix.length)) : NaN;
+    if (Number.isFinite(tail) && tail > max) max = tail;
+  }
+  return `${prefix}${max + 1}`;
+}
+
+/** Coarse confidence weight used by Sphere / population math. */
+export function confidenceWeight(c: CampFeatureConfidence | undefined): number {
+  if (c === 'low') return 0.4;
+  if (c === 'medium') return 0.8;
+  return 1; // high or missing — assume high so existing data stays unchanged
 }
 
 // ---------------------------------------------------------------------------
@@ -400,13 +553,22 @@ export function buildingsOf(features: CampFeature[]): CampFeature[] {
   return features.filter((f) => f.type === 'building');
 }
 
-/** Population estimate from tent count × avg household size. */
+/**
+ * Population estimate from tent count × avg household size. Tents are
+ * weighted by confidence so low-confidence detections don't fully count
+ * (a "low" tent contributes 0.4 of a tent). `tents` returns the
+ * confidence-weighted tent equivalent rounded to nearest, and
+ * `tents_raw` keeps the integer detection count for display alongside.
+ */
 export function estimatePopulation(
   features: CampFeature[],
   avgHouseholdSize = DEFAULT_AVG_HOUSEHOLD_SIZE
-): { tents: number; population: number } {
-  const tents = tentsOf(features).length;
-  return { tents, population: tents * avgHouseholdSize };
+): { tents: number; tents_raw: number; population: number } {
+  const tents = tentsOf(features);
+  const tents_raw = tents.length;
+  const weighted = tents.reduce((acc, t) => acc + confidenceWeight(t.confidence), 0);
+  const tentEquivalent = Math.round(weighted);
+  return { tents: tentEquivalent, tents_raw, population: tentEquivalent * avgHouseholdSize };
 }
 
 /**
@@ -633,6 +795,83 @@ export function suggestedDeliveryRoutes(features: CampFeature[]): Array<{
     .filter((t) => typeof t.x === 'number' && typeof t.y === 'number')
     .slice(0, 50) // cap so the SVG doesn't drown
     .map((t) => ({ from: c, to: { x: t.x as number, y: t.y as number } }));
+}
+
+// ---------------------------------------------------------------------------
+// Time-series diff — compare two snapshots' tent layouts
+// ---------------------------------------------------------------------------
+
+export interface TentMatch {
+  /** Tent from the ACTIVE (newer) snapshot. */
+  a: CampFeature;
+  /** Tent from the COMPARE (older) snapshot. */
+  b: CampFeature;
+  /** Normalized Euclidean distance between the two. */
+  distance: number;
+}
+
+export interface SnapshotDiff {
+  /** Matched pairs that barely moved (distance < DIFF_MOVE_THRESHOLD). */
+  kept: TentMatch[];
+  /** Matched pairs where the tent moved noticeably. */
+  moved: TentMatch[];
+  /** Tents present in active but not in compare — new arrivals. */
+  added: CampFeature[];
+  /** Tents present in compare but not in active — gone. */
+  removed: CampFeature[];
+  /** Days between the two snapshots (active.uploaded_at - compare.uploaded_at). */
+  span_days: number;
+}
+
+/**
+ * Compute the tent-level delta between two snapshots. Greedy nearest-
+ * neighbour: each active tent is matched to its closest unused compare
+ * tent within DIFF_MATCH_THRESHOLD; everything else is classified as
+ * added / removed.
+ *
+ * This is intentionally tent-only — water points and latrines move less
+ * often, and matching every type is overkill for the "how has the camp
+ * grown" question users actually ask.
+ */
+export function diffSnapshots(active: CampMap, compare: CampMap): SnapshotDiff {
+  const activeTents = tentsOf(active.features).filter(
+    (t): t is CampFeature & { x: number; y: number } =>
+      typeof t.x === 'number' && typeof t.y === 'number'
+  );
+  const compareTents = tentsOf(compare.features).filter(
+    (t): t is CampFeature & { x: number; y: number } =>
+      typeof t.x === 'number' && typeof t.y === 'number'
+  );
+  const used = new Set<number>();
+  const kept: TentMatch[] = [];
+  const moved: TentMatch[] = [];
+  const added: CampFeature[] = [];
+  for (const a of activeTents) {
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < compareTents.length; i++) {
+      if (used.has(i)) continue;
+      const b = compareTents[i];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx >= 0 && bestDist < DIFF_MATCH_THRESHOLD) {
+      used.add(bestIdx);
+      const match: TentMatch = { a, b: compareTents[bestIdx], distance: bestDist };
+      if (bestDist < DIFF_MOVE_THRESHOLD) kept.push(match);
+      else moved.push(match);
+    } else {
+      added.push(a);
+    }
+  }
+  const removed = compareTents.filter((_, i) => !used.has(i));
+  const span_ms =
+    new Date(active.uploaded_at).getTime() - new Date(compare.uploaded_at).getTime();
+  const span_days = Math.max(0, Math.round(span_ms / 86_400_000));
+  return { kept, moved, added, removed, span_days };
 }
 
 /**
