@@ -116,6 +116,7 @@ const sources = [
   'paper_form',
   'spreadsheet_map',
   'kids_content',
+  'camp_map',
 ];
 for (const s of sources) {
   assert(
@@ -213,6 +214,7 @@ const callsites = [
   ['src/pages/Dashboard.tsx', ['dashboard_summary']],
   ['src/pages/Families.tsx', ['priority_rank']],
   ['src/components/PaperFormImport.tsx', ['paper_form']],
+  ['src/services/campMap.ts', ['camp_map']],
 ];
 for (const [file, expected] of callsites) {
   const code = read(file);

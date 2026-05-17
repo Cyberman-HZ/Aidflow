@@ -323,7 +323,8 @@ export type AiTraceSource =
   | 'priority_rank'
   | 'paper_form'
   | 'spreadsheet_map'
-  | 'kids_content';
+  | 'kids_content'
+  | 'camp_map';
 
 export interface AiTrace {
   trace_id: string;
@@ -349,6 +350,88 @@ export interface AiTrace {
   error?: string;
   /** Open-ended extra context: per-family counts, image dimensions, etc. */
   metadata?: Record<string, unknown>;
+}
+
+// =========================================================================
+// Camp Map — drone / aerial image annotated by Gemma 4 vision
+//
+// One CampMap row per uploaded image. Features are stored with normalized
+// (0..1) coordinates so they survive image resize / re-render. Family
+// pins are a separate table-of-pairs so adding/removing a pin doesn't
+// rewrite the whole CampMap row.
+// =========================================================================
+
+export type CampFeatureType =
+  | 'tent'
+  | 'water_point'
+  | 'latrine'
+  | 'building'
+  | 'vehicle'
+  | 'open_area'
+  | 'path';
+
+export type CampFeatureConfidence = 'high' | 'medium' | 'low';
+
+export interface CampFeature {
+  /** Stable per-feature id within a CampMap (e.g. 'tent-12'). */
+  id: string;
+  type: CampFeatureType;
+  /** Normalized 0..1 anchor (centroid). All point-like features use this. */
+  x?: number;
+  y?: number;
+  /** For open_area: polygon of normalized [x,y] pairs. */
+  polygon?: Array<[number, number]>;
+  /** For path: polyline of normalized [x,y] pairs. */
+  polyline?: Array<[number, number]>;
+  /** Optional building sub-label (medical | warehouse | community | unknown). */
+  label?: string;
+  confidence?: CampFeatureConfidence;
+}
+
+/** Admin-painted polygon overlay (flood / hazard / no-go zone). */
+export interface CampHazardZone {
+  id: string;
+  kind: 'flood' | 'landslide' | 'security' | 'custom';
+  label?: string;
+  polygon: Array<[number, number]>; // normalized 0..1
+  created_at: string;
+}
+
+/** Family-to-feature pin (manual or GPS-auto-placed). */
+export interface CampFamilyPin {
+  family_id: string;
+  feature_id: string; // typically a tent
+  source: 'manual' | 'gps';
+}
+
+export interface CampMap {
+  /** Singleton: id is always 'current' for the MVP. */
+  id: string;
+  /** Resized JPEG/PNG bytes shown in the canvas (smaller than original). */
+  image: Blob;
+  image_mime: string;
+  /** Native pixel dimensions of the stored image. */
+  image_width: number;
+  image_height: number;
+  uploaded_at: string;
+  uploaded_by: string;
+  /** Optional source label ('drone', 'phone-aerial', 'satellite-screenshot'). */
+  source_kind?: string;
+  /** Optional GPS centre from EXIF, if present. */
+  gps_lat?: number;
+  gps_lng?: number;
+  /** Vision output. */
+  features: CampFeature[];
+  /** Free-text observations from the model. */
+  notes?: string[];
+  /** Admin-painted hazard polygons. */
+  hazard_zones: CampHazardZone[];
+  /** Family <-> tent pins. */
+  family_pins: CampFamilyPin[];
+  /** Configurable in Settings later; default 5 used by population estimator. */
+  avg_household_size?: number;
+  /** Last linked trace from the recordTrace() call. */
+  last_trace_id?: string;
 }
 
 /**

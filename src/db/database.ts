@@ -18,6 +18,7 @@ import type {
   BitchatApk,
   AidflowAndroidApk,
   AiTrace,
+  CampMap,
 } from '@/types';
 
 export class AidFlowDB extends Dexie {
@@ -34,6 +35,7 @@ export class AidFlowDB extends Dexie {
   bitchatApks!: Table<BitchatApk, string>;
   aidflowAndroidApks!: Table<AidflowAndroidApk, string>;
   aiTraces!: Table<AiTrace, string>;
+  campMaps!: Table<CampMap, string>;
   syncQueue!: Table<{ id?: number; kind: string; payload: unknown; created_at: string }, number>;
 
   constructor() {
@@ -215,6 +217,16 @@ export class AidFlowDB extends Dexie {
     this.version(10).stores({
       aiTraces: 'trace_id, source, created_at',
     });
+
+    // v11 — Drone Camp Planner. One CampMap row per uploaded aerial image,
+    //       with Gemma 4 vision output (tents, water points, latrines,
+    //       paths, open areas, buildings, vehicles), admin-painted hazard
+    //       polygons (flood-risk zones), and family-to-tent pins. MVP
+    //       stores a single 'current' singleton; future versions can keep
+    //       a time-series for diff views.
+    this.version(11).stores({
+      campMaps: 'id, uploaded_at',
+    });
   }
 
   /**
@@ -237,6 +249,7 @@ export class AidFlowDB extends Dexie {
       this.bitchatApks.clear(),
       this.aidflowAndroidApks.clear(),
       this.aiTraces.clear(),
+      this.campMaps.clear(),
       this.syncQueue.clear(),
     ]);
   }
