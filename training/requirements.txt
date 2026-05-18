@@ -1,0 +1,9 @@
+# Local CPU-side deps for synthetic-data generation + dataset prep.
+# Training itself happens on Kaggle and uses Kaggle's pre-installed CUDA stack.
+# Do NOT add PyTorch / transformers / unsloth here — those live in the Kaggle env.
+
+requests>=2.31
+Pillow>=10.0
+shapely>=2.0
+mercantile>=1.2
+tqdm>=4.66

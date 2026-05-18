@@ -1,0 +1,24 @@
+# Local Python venv
+.venv/
+__pycache__/
+*.pyc
+
+# Generated dataset + tile cache (regenerable from sources.py)
+dataset/
+dataset_smoke/
+.tile_cache/
+
+# Kaggle download artifacts
+lora_out/
+merged_hf/
+*.safetensors
+*.bin
+*.gguf
+
+# Deploy artifacts
+deploy/.llamacpp/
+deploy/out/
+
+# Eval outputs
+eval/test_images/
+eval/report.md
